@@ -38,9 +38,9 @@ Release profile is tuned for size: `opt-level = "z"`, `lto = "fat"`, `strip = tr
 ## Usage
 
 1. Run `SwitcherProgramm.exe` — the app goes straight to the tray.
-2. Right-click the icon → **Избранное** (Favourites) → click `+ <device name>` to add devices.
+2. Right-click the icon → **Favorites** → click `+ <device name>` to add devices.
 3. Left-click the icon to cycle between them, or press your hotkey.
-4. To assign a hotkey: right-click → **Hot-key переключатель: …** and press the combination.
+4. To assign a hotkey: right-click → **Hotkey: …** and press the combination.
    `Esc` cancels.
 
 > The UI is localized: Russian for Russian Windows, English everywhere else.
@@ -87,6 +87,8 @@ SwitcherProgramm.exe --lang          # print the detected UI language and sample
   called for all three roles (`Console`, `Multimedia`, `Communications`) so that already-playing
   applications move over too.
 - **Tray** is `tray-icon`; the notification is a native `tooltips_class32` tracking tooltip.
+- **One icon for everything**: `src/icon/grid.rs` holds a 16×16 pixel map; `icon::get_icon()` turns it
+  into the tray icon, and `build.rs` expands it to a multi-size `.ico` embedded into the executable.
 - **Hotkey** is `RegisterHotKey` with `hwnd = NULL`, so `WM_HOTKEY` arrives in the app's own message
   loop from any foreground application.
 

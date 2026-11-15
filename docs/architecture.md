@@ -15,6 +15,7 @@ How the project is put together: modules, event flow, and the key design decisio
 
 ```
 Cargo.toml
+build.rs            // generates the .ico from src/icon/grid.rs and embeds it
 AGENTS.md
 README.md
 docs/
@@ -29,7 +30,8 @@ src/
   hotkey/mod.rs     // global hotkey: RegisterHotKey, capture
   i18n/mod.rs       // UI localization: English / Russian by system language
   toast/mod.rs      // switch notification (tracking tooltip, auto-hide)
-  icon/mod.rs       // 16×16 pixel icon
+  icon/mod.rs       // 16×16 pixel icon for the tray
+  icon/grid.rs      // shared pixel map (tray + executable resource)
 ```
 
 ## Module responsibilities
@@ -70,6 +72,14 @@ The hover tooltip is capped at 64 characters (Shell `szTip` limit), so the text 
 handles it before dispatching. Capture works by polling `GetAsyncKeyState` over a candidate list
 (A-Z, 0-9, F1-F24, named keys) and detecting newly pressed keys.
 `Hotkey { modifiers, vk }` is serialised into the config.
+
+### `icon` + `build.rs` — shared pixel art
+
+The tray icon and the file icon come from one source: `src/icon/grid.rs` (a 16×16 map of
+transparent / blue / white pixels). `icon::get_icon()` expands it to 16×16 RGBA for the tray, and
+`build.rs` expands it to 16/24/32/48/64/256 px, packs the images into an `.ico` (PNG entries), compiles
+it with `rc.exe` and passes the resulting `.res` to the linker. No binary assets are committed; if
+`rc.exe` is unavailable the icon is skipped with a `cargo:warning` instead of failing the build.
 
 ### `i18n` — localization
 
