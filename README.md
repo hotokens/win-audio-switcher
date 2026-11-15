@@ -43,7 +43,8 @@ Release profile is tuned for size: `opt-level = "z"`, `lto = "fat"`, `strip = tr
 4. To assign a hotkey: right-click → **Hot-key переключатель: …** and press the combination.
    `Esc` cancels.
 
-> The UI is currently in Russian; the code and docs are in English/Russian.
+> The UI is localized: Russian for Russian Windows, English everywhere else.
+> Override with the `SWITCHER_LANG=en|ru` environment variable.
 
 ## Configuration
 
@@ -74,6 +75,7 @@ SwitcherProgramm.exe --list          # list render devices, mark the current def
 SwitcherProgramm.exe --switch <N>    # make device N the system default
 SwitcherProgramm.exe --toast-test    # verify the notification: visibility, position, auto-hide
 SwitcherProgramm.exe --hotkey-test   # verify reserved-combo rejection and WM_HOTKEY delivery
+SwitcherProgramm.exe --lang          # print the detected UI language and sample strings
 ```
 
 ## How it works

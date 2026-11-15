@@ -8,6 +8,7 @@ use tray_icon::TrayIconBuilder;
 
 use crate::audio::{AudioDevice, AudioManager};
 use crate::config::Favorites;
+use crate::i18n;
 
 /// Менеджер системного трея.
 pub struct TrayManager {
@@ -63,7 +64,7 @@ impl TrayManager {
     fn build_tooltip_text(device_name: &str, position: usize, total: usize) -> String {
         const MAX_CHARS: usize = 63; // 64-й символ занят нулевым терминатором
 
-        let first = format!("Устройство: {} из {}", position, total);
+        let first = i18n::lang().device_position(position, total);
         // +1 на '\n' между строками.
         let name_budget = MAX_CHARS.saturating_sub(first.chars().count() + 1);
         if name_budget == 0 {
@@ -114,7 +115,7 @@ impl TrayManager {
 
         // Пункт "Переключить" (циклическое переключение).
         if !fav_devices.is_empty() {
-            let cycle_label = format!("Переключить ({} из {})", cycle_index + 1, fav_devices.len());
+            let cycle_label = i18n::lang().switch_item(cycle_index + 1, fav_devices.len());
             let cycle = MenuItem::with_id("cycle", cycle_label, true, None::<Accelerator>);
             let _ = menu.append(&cycle);
         } else {
@@ -122,17 +123,17 @@ impl TrayManager {
             // Пункт-подсказка: отключён, чтобы не «кликать в пустоту».
             let note = MenuItem::with_id(
                 "empty",
-                "Добавьте устройства в избранное",
+                i18n::lang().empty_hint(),
                 false,
                 None::<Accelerator>,
             );
             let _ = menu.append(&note);
         }
 
-        // Пункт «Hot-key переключатель» — клик запускает захват комбинации.
+        // Пункт «Hotkey» — клик запускает захват комбинации.
         let hotkey_label = match &favorites.hotkey {
-            Some(hk) => format!("Hot-key переключатель: {}", hk.display()),
-            None => "Hot-key переключатель: не задан".to_string(),
+            Some(hk) => i18n::lang().hotkey_item(&hk.display()),
+            None => i18n::lang().hotkey_unset(),
         };
         let hotkey_item = MenuItem::with_id("hotkey", hotkey_label, true, None::<Accelerator>);
         let _ = menu.append(&hotkey_item);
@@ -141,7 +142,7 @@ impl TrayManager {
         let _ = menu.append(&PredefinedMenuItem::separator());
 
         // Подменю "Избранное": избранные (с маркером текущего) + остальные устройства.
-        let favorites_submenu = Submenu::new("Избранное", true);
+        let favorites_submenu = Submenu::new(i18n::lang().favorites_label(), true);
 
         for device in &fav_devices {
             let is_active = device.id == current_device;
@@ -176,7 +177,7 @@ impl TrayManager {
         let _ = menu.append(&PredefinedMenuItem::separator());
 
         // «Выход»: завершает приложение (обрабатывается в event loop по id "exit").
-        let exit = MenuItem::with_id("exit", "Выход", true, None::<Accelerator>);
+        let exit = MenuItem::with_id("exit", i18n::lang().exit_label(), true, None::<Accelerator>);
         let _ = menu.append(&exit);
 
         // Возврат: тултип + меню.

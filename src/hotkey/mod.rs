@@ -45,9 +45,9 @@ pub struct Hotkey {
 /// Ошибки регистрации горячей клавиши.
 #[derive(Debug, Error)]
 pub enum HotkeyError {
-    #[error("комбинация занята системой или другим приложением")]
+    #[error("combination is taken by Windows or another app")]
     Conflict,
-    #[error("не удалось зарегистрировать: {0}")]
+    #[error("registration failed: {0}")]
     Os(String),
 }
 

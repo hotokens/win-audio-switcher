@@ -27,6 +27,7 @@ src/
   config/mod.rs     // favourites + hotkey: load/save config.json
   tray/mod.rs       // icon, menu, tooltip
   hotkey/mod.rs     // global hotkey: RegisterHotKey, capture
+  i18n/mod.rs       // UI localization: English / Russian by system language
   toast/mod.rs      // switch notification (tracking tooltip, auto-hide)
   icon/mod.rs       // 16×16 pixel icon
 ```
@@ -70,8 +71,14 @@ handles it before dispatching. Capture works by polling `GetAsyncKeyState` over 
 (A-Z, 0-9, F1-F24, named keys) and detecting newly pressed keys.
 `Hotkey { modifiers, vk }` is serialised into the config.
 
-### `toast` — switch notification
+### `i18n` — localization
 
+All user-visible strings live in `i18n::lang()`: a `Lang` enum (English / Russian) with one method
+per message. The language is detected once from `GetUserDefaultUILanguage` (primary language ID
+`0x19` = Russian), overridable with `SWITCHER_LANG=en|ru` for testing. English is the fallback for
+every other locale. No UI text is hardcoded outside this module.
+
+### `toast` — switch notification
 A `tooltips_class32` window in `TTF_TRACK | TTF_ABSOLUTE` mode:
 `TTM_ADDTOOLW` → `TTM_TRACKACTIVATE` → measure with `GetWindowRect` → place precisely
 (below the icon, or above it when there is no room) clamped to the monitor work area →
@@ -118,5 +125,5 @@ the goal is one small (~300 KB) tray executable.
 
 ## Diagnostic modes
 
-`--list`, `--switch <N>`, `--toast-test`, `--hotkey-test` run without the tray and the mutex,
-with their own COM initialisation; they exist to verify audio/UI behaviour on a live system.
+`--list`, `--switch <N>`, `--toast-test`, `--hotkey-test`, `--lang` run without the tray and the
+mutex, with their own COM initialisation; they exist to verify audio/UI behaviour on a live system.

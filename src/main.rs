@@ -5,6 +5,7 @@
 mod audio;
 mod config;
 mod hotkey;
+mod i18n;
 mod icon;
 mod policy;
 mod toast;
@@ -144,7 +145,11 @@ impl AppState {
     /// Показать всплывающую подсказку о новом активном устройстве
     /// (у иконки трея, как при наведении; исчезает через 1 с).
     fn show_switch_toast(&mut self, device_name: &str, position: usize, total: usize) {
-        let text = format!("{}\nУстройство: {} из {}", device_name, position, total);
+        let text = format!(
+            "{}\n{}",
+            device_name,
+            i18n::lang().device_position(position, total)
+        );
         let anchor = self.toast_anchor();
         self.toast.show_anchored(&text, anchor);
     }
@@ -177,21 +182,28 @@ impl AppState {
             Some(2) => "·  ·  ●",
             _ => "●  ·  ·",
         };
-        let text = format!("{}   Hot-key переключатель: нажмите комбинацию…", dots);
+        let lang = i18n::lang();
+        let text = format!(
+            "{}   {}: {}",
+            dots,
+            lang.hotkey_label(),
+            lang.capture_hint()
+        );
         let anchor = self.toast_anchor();
         self.toast.show_anchored(&text, anchor);
     }
 
     /// Прервать захват (Esc): вернуть прежнюю комбинацию, если она была.
     fn cancel_capture(&mut self) {
+        let lang = i18n::lang();
         self.capture = None;
         if let Some(hk) = self.favorites.hotkey {
             if let Err(e) = hk.register() {
                 log::warn!("Failed to restore hotkey: {}", e);
             }
-            self.flash_toast("Hot-key не изменён");
+            self.flash_toast(lang.hotkey_unchanged());
         } else {
-            self.flash_toast("Hot-key не задан");
+            self.flash_toast(lang.hotkey_not_set());
         }
     }
 
@@ -203,7 +215,7 @@ impl AppState {
             log::error!("Failed to save hotkey: {}", e);
         }
         log::info!("Hotkey set: {}", hk.display());
-        self.flash_toast(&format!("Hot-key переключатель: {}", hk.display()));
+        self.flash_toast(&i18n::lang().hotkey_item(&hk.display()));
         self.tray.update(
             &self.audio,
             &self.favorites,
@@ -246,10 +258,11 @@ impl AppState {
             }
 
             let modifiers = hotkey::modifiers_down();
+            let lang = i18n::lang();
             if modifiers == 0 {
                 // Без модификатора комбинация перехватила бы обычное нажатие
                 // клавиши во всех приложениях — не разрешаем.
-                self.flash_toast("Добавьте Ctrl, Alt, Shift или Win");
+                self.flash_toast(lang.need_modifier());
             } else {
                 let hk = hotkey::Hotkey { modifiers, vk };
                 match hk.register() {
@@ -257,10 +270,13 @@ impl AppState {
                         self.finish_capture(hk);
                         return;
                     }
+                    Err(hotkey::HotkeyError::Conflict) => {
+                        // Занята системой или другим приложением — сообщаем
+                        // и продолжаем ждать другую комбинацию.
+                        self.flash_toast(lang.hotkey_conflict());
+                    }
                     Err(e) => {
-                        // Комбинация занята системой или другим приложением:
-                        // сообщаем и продолжаем ждать другую.
-                        self.flash_toast(&format!("{} — выберите другую", e));
+                        self.flash_toast(&lang.hotkey_failed(&e.to_string()));
                     }
                 }
             }
@@ -705,8 +721,20 @@ fn cli_mode(args: &[String]) -> i32 {
                 0
             }
         }
+        Some("--lang") => {
+            // Диагностика локализации: какой язык выбран и как выглядят строки.
+            let lang = i18n::lang();
+            println!("lang: {:?}", lang);
+            println!("menu cycle:      {}", lang.switch_item(1, 3));
+            println!("menu hotkey:     {}", lang.hotkey_item("Ctrl + Shift + U"));
+            println!("menu hotkey unset: {}", lang.hotkey_unset());
+            println!("menu favorites:  {}", lang.favorites_label());
+            println!("menu exit:       {}", lang.exit_label());
+            println!("toast:           {}", lang.device_position(1, 3));
+            0
+        }
         _ => {
-            eprintln!("Usage: SwitcherProgramm.exe --list | --switch <index> | --toast-test | --hotkey-test");
+            eprintln!("Usage: SwitcherProgramm.exe --list | --switch <index> | --toast-test | --hotkey-test | --lang");
             2
         }
     }
