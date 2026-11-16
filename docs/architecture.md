@@ -42,8 +42,9 @@ Thin layer over the MMDevice API: `IMMDeviceEnumerator::EnumAudioEndpoints` for 
 `GetDefaultAudioEndpoint` for the current default, `PKEY_Device_FriendlyName` for names.
 `AudioDevice { id, name, state }`, where `id` is the stable endpoint ID (`IMMDevice::GetId`).
 
-`IMMNotificationClient` is a stub: add/remove/state-change events are only logged
-(reacting to them is a future step).
+`IMMNotificationClient` is implemented: every event (device added/removed/state changed, default changed)
+marks the state dirty and wakes the event loop with a thread message. The loop coalesces bursts and
+after 150 ms of quiet re-reads the default endpoint, re-syncs the cycle position and rebuilds the menu.
 
 ### `policy` — changing the default device
 
@@ -105,16 +106,25 @@ A single main thread with its own message loop:
 ```
 loop {
     while PeekMessageW(...) {
-        WM_QUIT   -> exit
-        WM_HOTKEY -> cycle_next()
-        otherwise -> TranslateMessage + DispatchMessage
+        WM_QUIT           -> exit
+        WM_HOTKEY         -> cycle_next()
+        WM_DEVICES_CHANGED-> schedule a debounced refresh
+        otherwise         -> TranslateMessage + DispatchMessage
     }
     TrayIconEvent::receiver().try_recv()  -> cache icon rect; Left click -> cycle_next()
     MenuEvent::receiver().try_recv()      -> dispatch_menu_event()
+    flush_due_refresh()                   -> re-read devices after the quiet period
     tick_capture()                        -> hotkey capture (when active)
-    sleep(15 ms while capturing, otherwise 50 ms)
+    MsgWaitForMultipleObjectsEx(timeout)  -> INFINITE, or 15 ms while capturing
 }
 ```
+
+The loop sleeps in `MsgWaitForMultipleObjectsEx` instead of polling, so it costs no CPU while idle and
+still wakes instantly on clicks, `WM_HOTKEY` and COM notifications. Notification callbacks may run on a
+different thread, so they post a thread message rather than relying on shared state alone.
+
+Double clicks on the tray icon are debounced: Windows delivers `Double` plus two `Left` events, and only
+the first click within 350 ms triggers a switch.
 
 COM is initialised (`CoInitializeEx`, STA) before any object is created; all COM objects and UI
 live on this same thread — nothing is passed between threads.

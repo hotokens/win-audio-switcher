@@ -4,17 +4,21 @@
 //! `IMMNotificationClient` для подписки на события добавления/удаления/смены состояния.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use windows::core::{implement, PCWSTR, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::Media::Audio::{
     eConsole, eRender, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator, IMMNotificationClient,
     IMMNotificationClient_Impl, MMDeviceEnumerator, DEVICE_STATE, DEVICE_STATE_ACTIVE,
     DEVICE_STATE_UNPLUGGED,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, STGM_READ};
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::System::Variant::VT_LPWSTR;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
+use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_APP};
 
 use crate::config::Favorites;
 
@@ -52,6 +56,9 @@ impl AudioManager {
     ///
     /// Допустимые `expect` — инициализация до входа в event loop (см. AGENTS.md).
     pub fn new() -> Self {
+        // Запоминаем поток event loop — колбэки будут будить его сообщением.
+        UI_THREAD_ID.store(unsafe { GetCurrentThreadId() }, Ordering::Release);
+
         unsafe {
             // Создаём IMMDeviceEnumerator через CoCreateInstance.
             // IID берётся из типа T (= IID_IMMDeviceEnumerator).
@@ -60,8 +67,8 @@ impl AudioManager {
                     .expect("Failed to create IMMDeviceEnumerator");
 
             // Создаём COM-объект IMMNotificationClient и регистрируем callback.
-            // Пока это заглушка (логирование событий); реальное обновление
-            // кэша устройств — следующий шаг (см. HANDOFF.md).
+            // События выставляют флаг, который забирает event loop и
+            // перестраивает меню (см. `take_refresh_request`).
             let client: IMMNotificationClient = NotificationClient.into();
             if let Err(e) = enumerator.RegisterEndpointNotificationCallback(&client) {
                 log::error!("Failed to register endpoint notification callback: {}", e);
@@ -224,10 +231,39 @@ fn get_state(device: &IMMDevice) -> DeviceState {
     }
 }
 
-/// Заглушка IMMNotificationClient: пока только логирует события.
+/// Флаг «состояние устройств изменилось».
 ///
-/// Реальная реакция (обновление кэша устройств и уведомление event loop) —
-/// следующий шаг (см. HANDOFF.md «Что требует доработки»).
+/// Колбэки `IMMNotificationClient` выставляют его, а event loop забирает
+/// (`take_refresh_request`) и перестраивает меню.
+static DEVICES_DIRTY: AtomicBool = AtomicBool::new(false);
+
+/// ID потока, в котором крутится event loop (0 — ещё не известен).
+static UI_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+/// Сообщение потоку: список устройств изменился.
+pub const WM_DEVICES_CHANGED: u32 = WM_APP + 1;
+
+/// Запросить обновление списка устройств (из колбэка).
+///
+/// Колбэки могут прийти не на потоке event loop, поэтому мало выставить флаг —
+/// нужно ещё разбудить его сообщением, иначе он спит в `MsgWaitForMultipleObjects`.
+fn request_refresh() {
+    DEVICES_DIRTY.store(true, Ordering::Release);
+    let thread_id = UI_THREAD_ID.load(Ordering::Acquire);
+    if thread_id != 0 {
+        unsafe {
+            let _ = PostThreadMessageW(thread_id, WM_DEVICES_CHANGED, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+/// Забрать запрос на обновление: `true` — устройства изменились.
+pub fn take_refresh_request() -> bool {
+    DEVICES_DIRTY.swap(false, Ordering::Acquire)
+}
+
+/// `IMMNotificationClient` проекта: любое событие означает, что кэш меню
+/// и состояние цикла могли устареть.
 ///
 /// ВАЖНО (windows 0.58): `*_Impl`-трейт реализуется для СГЕНЕРИРОВАННОЙ
 /// обёртки `NotificationClient_Impl`, а не для исходной структуры —
@@ -243,16 +279,19 @@ impl IMMNotificationClient_Impl for NotificationClient_Impl {
         _newstate: DEVICE_STATE,
     ) -> windows::core::Result<()> {
         log::debug!("Notification: device state changed");
+        request_refresh();
         Ok(())
     }
 
     fn OnDeviceAdded(&self, _deviceid: &PCWSTR) -> windows::core::Result<()> {
         log::debug!("Notification: device added");
+        request_refresh();
         Ok(())
     }
 
     fn OnDeviceRemoved(&self, _deviceid: &PCWSTR) -> windows::core::Result<()> {
         log::debug!("Notification: device removed");
+        request_refresh();
         Ok(())
     }
 
@@ -263,6 +302,7 @@ impl IMMNotificationClient_Impl for NotificationClient_Impl {
         _deviceid: &PCWSTR,
     ) -> windows::core::Result<()> {
         log::debug!("Notification: default device changed");
+        request_refresh();
         Ok(())
     }
 
@@ -272,6 +312,7 @@ impl IMMNotificationClient_Impl for NotificationClient_Impl {
         _key: &PROPERTYKEY,
     ) -> windows::core::Result<()> {
         log::debug!("Notification: property value changed");
+        request_refresh();
         Ok(())
     }
 }

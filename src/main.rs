@@ -20,15 +20,28 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{CreateMutexW, INFINITE};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetCursorPos, GetSystemMetrics, PeekMessageW, TranslateMessage, MSG,
-    PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, WM_HOTKEY, WM_QUIT,
+    DispatchMessageW, GetCursorPos, GetSystemMetrics, MsgWaitForMultipleObjectsEx, PeekMessageW,
+    TranslateMessage, MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SM_CXSCREEN, SM_CYSCREEN,
+    WM_HOTKEY, WM_QUIT,
 };
 
 /// Имя именованного мьютекса для single-instance.
 /// Префикс `Local\` обязателен: мьютекс должен жить в сессии текущего пользователя.
 const INSTANCE_MUTEX_NAME: PCWSTR = w!("Local\\SwitcherProgramm.Instance");
+
+/// Окно подавления серии кликов: двойной клик по иконке Windows присылает
+/// как `Double` плюс два `Left`, а переключение должно быть одно.
+const ICON_CLICK_DEBOUNCE: Duration = Duration::from_millis(350);
+
+/// Период просыпания event loop во время захвата хоткея (идёт опрос клавиатуры).
+const CAPTURE_POLL_MS: u32 = 15;
+
+/// Пауза перед перестройкой меню после событий устройств: Windows присылает
+/// их сериями (смена default — по событию на роль), а перечисление устройств
+/// и пересборка меню — дорогие операции.
+const REFRESH_DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Состояние захвата горячей клавиши (пользователь выбирает комбинацию).
 struct CaptureState {
@@ -53,6 +66,12 @@ struct AppState {
     last_icon_rect: Option<(i32, i32, i32, i32)>,
     /// Активный захват хоткея (None — обычный режим).
     capture: Option<CaptureState>,
+    /// Момент последнего переключения кликом по иконке — чтобы двойной клик
+    /// (Windows присылает ещё и `Double`, а следом второй `Left`) не
+    /// переключал устройство дважды.
+    last_icon_cycle: Option<Instant>,
+    /// Когда пора перечитать устройства (склеивает серию уведомлений).
+    refresh_due: Option<Instant>,
 }
 
 impl AppState {
@@ -95,7 +114,60 @@ impl AppState {
             toast: toast::Toast::new(),
             last_icon_rect: None,
             capture: None,
+            last_icon_cycle: None,
+            refresh_due: None,
         }
+    }
+
+    /// Запланировать перечитывание устройств (серия событий схлопнется в одно).
+    fn schedule_refresh(&mut self) {
+        self.refresh_due = Some(Instant::now() + REFRESH_DEBOUNCE);
+    }
+
+    /// Выполнить отложенное обновление, если пауза после событий уже прошла.
+    fn flush_due_refresh(&mut self) {
+        if let Some(due) = self.refresh_due {
+            if Instant::now() >= due {
+                self.refresh_due = None;
+                self.refresh_from_system();
+            }
+        }
+    }
+
+    /// Сколько ждать следующего события (мс): учитывает захват хоткея
+    /// и отложенное обновление устройств.
+    fn wait_timeout_ms(&self) -> u32 {
+        if self.capture.is_some() {
+            return CAPTURE_POLL_MS;
+        }
+        match self.refresh_due {
+            Some(due) => {
+                let now = Instant::now();
+                if due <= now {
+                    0
+                } else {
+                    (due - now).as_millis().min(u32::MAX as u128) as u32
+                }
+            }
+            None => INFINITE,
+        }
+    }
+
+    /// Перечитать состояние системы: текущее устройство, позицию в цикле,
+    /// меню и тултип. Вызывается, когда устройства добавились/удалились или
+    /// default сменили извне.
+    fn refresh_from_system(&mut self) {
+        if let Ok(default) = self.audio.get_default_endpoint() {
+            self.current_device = default;
+        }
+        self.sync_cycle_index();
+        self.tray.update(
+            &self.audio,
+            &self.favorites,
+            &self.current_device,
+            self.cycle_index,
+        );
+        log::debug!("State refreshed after device notification");
     }
 
     /// Якорь для тоста: прямоугольник иконки трея, иначе точка у курсора.
@@ -429,11 +501,10 @@ fn main() {
 /// надо опустошать после каждого прогона message loop.
 fn run_event_loop(state: &mut AppState) {
     loop {
-        // 1. Прокачиваем оконные сообщения (в т.ч. скрытого окна трея).
-        let mut msg = MSG::default();
         // 1. Прокачиваем все накопленные сообщения.
         //    WM_HOTKEY приходит в очередь потока (RegisterHotKey с hwnd = NULL) —
         //    это и есть срабатывание глобальной комбинации из любого приложения.
+        let mut msg = MSG::default();
         unsafe {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
@@ -441,6 +512,12 @@ fn run_event_loop(state: &mut AppState) {
                 }
                 if msg.message == WM_HOTKEY {
                     state.cycle_next();
+                    continue;
+                }
+                if msg.message == audio::WM_DEVICES_CHANGED {
+                    // Колбэк уже выставил флаг; сообщение лишь разбудило нас.
+                    audio::take_refresh_request();
+                    state.schedule_refresh();
                     continue;
                 }
                 let _ = TranslateMessage(&msg);
@@ -459,8 +536,17 @@ fn run_event_loop(state: &mut AppState) {
                 rect.bottom as i32,
             ));
 
+            // Двойной клик Windows присылает как `Double` + два `Left`,
+            // поэтому обрабатываем только `Left` и гасим серию по времени.
             if matches!(event.click_type, ClickType::Left) {
-                state.cycle_next();
+                let now = Instant::now();
+                let too_soon = state
+                    .last_icon_cycle
+                    .is_some_and(|prev| now.duration_since(prev) < ICON_CLICK_DEBOUNCE);
+                if !too_soon {
+                    state.last_icon_cycle = Some(now);
+                    state.cycle_next();
+                }
             }
         }
 
@@ -471,15 +557,23 @@ fn run_event_loop(state: &mut AppState) {
             }
         }
 
-        // 4. Захват хоткея (если идёт): анимация точек и чтение клавиш.
+        // 4. Устройства добавились/удалились или default сменили извне.
+        if audio::take_refresh_request() {
+            state.schedule_refresh();
+        }
+        state.flush_due_refresh();
+
+        // 5. Захват хоткея (если идёт): анимация точек и чтение клавиш.
         state.tick_capture();
 
-        // Нет событий — короткая пауза, чтобы не молотить на 100% CPU.
-        // Во время захвата хоткея опрашиваем клавиатуру чаще (15 мс),
-        // чтобы не пропустить быстрое нажатие.
-        // Полноценное решение (MsgWaitForMultipleObjects) — будущий шаг.
-        let idle_ms = if state.capture.is_some() { 15 } else { 50 };
-        std::thread::sleep(Duration::from_millis(idle_ms));
+        // Ждём следующего сообщения вместо `sleep`: Windows будит поток,
+        // как только появляется ввод (клик, WM_HOTKEY, COM-уведомление).
+        // Таймаут нужен для опроса клавиатуры при захвате и для отложенного
+        // обновления устройств; в остальное время спим бесконечно.
+        let timeout = state.wait_timeout_ms();
+        unsafe {
+            MsgWaitForMultipleObjectsEx(None, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
     }
 }
 
