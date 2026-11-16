@@ -87,8 +87,8 @@ SwitcherProgramm.exe --lang          # print the detected UI language and sample
   called for all three roles (`Console`, `Multimedia`, `Communications`) so that already-playing
   applications move over too.
 - **Tray** is `tray-icon`; the notification is a native `tooltips_class32` tracking tooltip.
-- **One icon for everything**: `src/icon/grid.rs` holds a 16×16 pixel map; `icon::get_icon()` turns it
-  into the tray icon, and `build.rs` expands it to a multi-size `.ico` embedded into the executable.
+- **One icon for everything**: `assets/app-icon.png` (512×512) is the master; `build.rs` embeds a
+  multi-size `.ico` into the executable and a 32×32 frame for the tray.
 - **Hotkey** is `RegisterHotKey` with `hwnd = NULL`, so `WM_HOTKEY` arrives in the app's own message
   loop from any foreground application.
 

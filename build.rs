@@ -1,65 +1,144 @@
-//! Встраивание иконки приложения в `.exe`.
+//! Встраивание иконки приложения.
 //!
-//! Иконка трея и иконка файла должны совпадать, поэтому источник один —
-//! `src/icon/grid.rs`. Здесь карта разворачивается в несколько размеров
-//! (16…256), упаковывается в `.ico`, компилируется `rc.exe` в `.res` и
-//! передаётся линкеру.
+//! Мастер-файл — `assets/app-icon.png` (512×512 RGBA). Из него собирается:
+//! - `.ico` для ресурса exe (размеры 16…256, PNG-записи);
+//! - RGBA-кадр 32×32 для иконки трея (генерируется в `OUT_DIR` и
+//!   подключается через `include_bytes!`).
+//!
+//! Уменьшение — усреднением по площади (box filter) с предумножением альфы,
+//! чтобы не было тёмной каймы по краям.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-// Пиксельная карта без внешних зависимостей — можно включить как есть.
-include!("src/icon/grid.rs");
-
-/// Размеры, которые попадут в `.ico` (Explorer выберет подходящий).
-const ICON_SIZES: [u32; 6] = [16, 24, 32, 48, 64, 256];
+/// Размеры, которые попадут в `.ico`.
+const ICON_SIZES: [u32; 9] = [16, 20, 24, 32, 40, 48, 64, 128, 256];
+/// Размер иконки трея (Windows сам уменьшит до 16/20/24 при другом DPI).
+const TRAY_SIZE: u32 = 32;
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/icon/grid.rs");
+    println!("cargo:rerun-if-changed=assets/app-icon.png");
     println!("cargo:rerun-if-changed=build.rs");
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
-    let ico_path = out_dir.join("app.ico");
 
-    if let Err(e) = write_ico(&ico_path) {
+    let source = match load_source() {
+        Ok(source) => source,
+        Err(e) => {
+            println!("cargo:warning=cannot read assets/app-icon.png: {}", e);
+            write_fallback_tray_icon(&out_dir);
+            return;
+        }
+    };
+    let (width, height, rgba) = source;
+
+    // Кадр для трея — всегда, независимо от наличия rc.exe.
+    let tray = resize_rgba(&rgba, width, height, TRAY_SIZE, TRAY_SIZE);
+    if let Err(e) = std::fs::write(out_dir.join("tray-32.rgba"), &tray) {
+        println!("cargo:warning=cannot write tray icon: {}", e);
+    }
+
+    let ico_path = out_dir.join("app.ico");
+    if let Err(e) = write_ico(&ico_path, width, height, &rgba) {
         println!("cargo:warning=cannot generate app icon: {}", e);
         return;
     }
 
-    let Some(rc) = find_rc() else {
-        println!("cargo:warning=rc.exe not found; the .exe will use the default icon");
-        return;
-    };
-
-    let rc_file = out_dir.join("app.rc");
-    // В .rc обратные слэши экранируются, путь — в кавычках.
-    let ico_escaped = ico_path.to_string_lossy().replace('\\', "\\\\");
-    if let Err(e) = std::fs::write(&rc_file, format!("1 ICON \"{}\"\n", ico_escaped)) {
-        println!("cargo:warning=cannot write app.rc: {}", e);
-        return;
-    }
-
-    let res_file = out_dir.join("app.res");
-    let status = Command::new(&rc)
-        .arg("/nologo")
-        .arg(format!("/fo{}", res_file.display()))
-        .arg(&rc_file)
-        .status();
-
-    match status {
-        Ok(status) if status.success() => {
-            println!("cargo:rustc-link-arg={}", res_file.display());
-        }
-        Ok(status) => println!("cargo:warning=rc.exe failed with {}; icon skipped", status),
-        Err(e) => println!("cargo:warning=cannot run rc.exe: {}; icon skipped", e),
-    }
+    embed_as_resource(&out_dir, &ico_path);
 }
 
-/// Собрать `.ico` с PNG-изображениями всех размеров.
-fn write_ico(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+/// Прочитать PNG и вернуть RGBA-пиксели.
+fn load_source() -> Result<(u32, u32, Vec<u8>), Box<dyn std::error::Error>> {
+    let bytes = std::fs::read("assets/app-icon.png")?;
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(
+        png::Transformations::EXPAND | png::Transformations::ALPHA | png::Transformations::STRIP_16,
+    );
+
+    let mut reader = decoder.read_info()?;
+    let mut buffer = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer)?;
+    buffer.truncate(info.buffer_size());
+
+    let (color_type, _) = reader.output_color_type();
+    let rgba = match color_type {
+        png::ColorType::Rgba => buffer,
+        png::ColorType::Rgb => buffer
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
+            .collect(),
+        other => return Err(format!("unsupported PNG color type: {:?}", other).into()),
+    };
+
+    Ok((info.width, info.height, rgba))
+}
+
+/// Уменьшить RGBA-изображение усреднением по площади (premultiplied alpha).
+fn resize_rgba(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
+    let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
+    let mut out = vec![0u8; dw * dh * 4];
+    let scale_x = sw as f64 / dw as f64;
+    let scale_y = sh as f64 / dh as f64;
+
+    for dy in 0..dh {
+        let y0 = dy as f64 * scale_y;
+        let y1 = (dy + 1) as f64 * scale_y;
+        for dx in 0..dw {
+            let x0 = dx as f64 * scale_x;
+            let x1 = (dx + 1) as f64 * scale_x;
+
+            let mut acc = [0f64; 3];
+            let mut alpha_sum = 0f64;
+            let mut coverage = 0f64;
+
+            for sy in y0.floor() as usize..(y1.ceil() as usize).min(sh) {
+                let wy = overlap(y0, y1, sy as f64, (sy + 1) as f64);
+                for sx in x0.floor() as usize..(x1.ceil() as usize).min(sw) {
+                    let wx = overlap(x0, x1, sx as f64, (sx + 1) as f64);
+                    let weight = wx * wy;
+                    if weight <= 0.0 {
+                        continue;
+                    }
+                    let index = (sy * sw + sx) * 4;
+                    let alpha = src[index + 3] as f64 / 255.0;
+                    acc[0] += src[index] as f64 * alpha * weight;
+                    acc[1] += src[index + 1] as f64 * alpha * weight;
+                    acc[2] += src[index + 2] as f64 * alpha * weight;
+                    alpha_sum += alpha * weight;
+                    coverage += weight;
+                }
+            }
+
+            let out_index = (dy * dw + dx) * 4;
+            if coverage > 0.0 && alpha_sum > 0.0 {
+                out[out_index] = (acc[0] / alpha_sum).round().clamp(0.0, 255.0) as u8;
+                out[out_index + 1] = (acc[1] / alpha_sum).round().clamp(0.0, 255.0) as u8;
+                out[out_index + 2] = (acc[2] / alpha_sum).round().clamp(0.0, 255.0) as u8;
+                out[out_index + 3] = (alpha_sum / coverage * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+
+    out
+}
+
+/// Длина пересечения отрезков [a0, a1] и [b0, b1].
+fn overlap(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
+    (a1.min(b1) - a0.max(b0)).max(0.0)
+}
+
+/// Собрать `.ico` из PNG-изображений всех размеров.
+fn write_ico(
+    path: &Path,
+    source_width: u32,
+    source_height: u32,
+    rgba: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut images: Vec<(u32, Vec<u8>)> = Vec::with_capacity(ICON_SIZES.len());
     for size in ICON_SIZES {
-        let pixels = rgba(size as usize);
+        let pixels = resize_rgba(rgba, source_width, source_height, size, size);
         images.push((size, encode_png(size, &pixels)?));
     }
 
@@ -92,51 +171,55 @@ fn write_ico(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Закодировать RGBA-пиксели в PNG с индексированной палитрой.
-///
-/// В иконке всего три цвета (прозрачный, фон, полоса), поэтому один байт
-/// на пиксель вместо четырёх сжимается заметно лучше — особенно на 256×256.
+/// Закодировать RGBA-пиксели в PNG (максимальное сжатие).
 fn encode_png(size: u32, rgba: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    // Палитра: 0 — прозрачный, 1 — фон, 2 — полоса.
-    const TRANSPARENT: u8 = 0;
-    const BACKGROUND: u8 = 1;
-    const BAR_INDEX: u8 = 2;
-
-    let mut indexed = Vec::with_capacity(rgba.len() / 4);
-    for pixel in rgba.chunks_exact(4) {
-        let index = if pixel[3] == 0 {
-            TRANSPARENT
-        } else if pixel[..3] == BAR[..3] {
-            BAR_INDEX
-        } else {
-            BACKGROUND
-        };
-        indexed.push(index);
-    }
-
     let mut png = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut png, size, size);
-        encoder.set_color(png::ColorType::Indexed);
+        encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_palette(&[
-            0,
-            0,
-            0, // 0: прозрачный (цвет не важен)
-            BG[0],
-            BG[1],
-            BG[2], // 1: фон
-            BAR[0],
-            BAR[1],
-            BAR[2], // 2: полоса
-        ]);
-        // Альфа для палитровых записей: прозрачный только индекс 0.
-        encoder.set_trns(vec![0u8, 255, 255]);
         encoder.set_compression(png::Compression::Best);
         let mut writer = encoder.write_header()?;
-        writer.write_image_data(&indexed)?;
+        writer.write_image_data(rgba)?;
     }
     Ok(png)
+}
+
+/// Скомпилировать `.ico` в `.res` и передать линкеру.
+fn embed_as_resource(out_dir: &Path, ico_path: &Path) {
+    let Some(rc) = find_rc() else {
+        println!("cargo:warning=rc.exe not found; the .exe will use the default icon");
+        return;
+    };
+
+    let rc_file = out_dir.join("app.rc");
+    // В .rc обратные слэши экранируются, путь — в кавычках.
+    let ico_escaped = ico_path.to_string_lossy().replace('\\', "\\\\");
+    if let Err(e) = std::fs::write(&rc_file, format!("1 ICON \"{}\"\n", ico_escaped)) {
+        println!("cargo:warning=cannot write app.rc: {}", e);
+        return;
+    }
+
+    let res_file = out_dir.join("app.res");
+    let status = Command::new(&rc)
+        .arg("/nologo")
+        .arg(format!("/fo{}", res_file.display()))
+        .arg(&rc_file)
+        .status();
+
+    match status {
+        Ok(status) if status.success() => {
+            println!("cargo:rustc-link-arg={}", res_file.display());
+        }
+        Ok(status) => println!("cargo:warning=rc.exe failed with {}; icon skipped", status),
+        Err(e) => println!("cargo:warning=cannot run rc.exe: {}; icon skipped", e),
+    }
+}
+
+/// Резервный кадр трея (прозрачный), если PNG не прочитался.
+fn write_fallback_tray_icon(out_dir: &Path) {
+    let size = TRAY_SIZE as usize;
+    let _ = std::fs::write(out_dir.join("tray-32.rgba"), vec![0u8; size * size * 4]);
 }
 
 /// Найти `rc.exe`: переменная `RC`, переменные окружения Visual Studio,

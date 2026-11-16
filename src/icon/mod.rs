@@ -1,22 +1,20 @@
-//! Пиксельная иконка приложения: синий квадрат с белыми «полосами
-//! эквалайзера» — отсылка к аудиовыводу.
+//! Иконка приложения.
 //!
-//! Карта пикселей живёт в [`grid`] и используется дважды: для иконки трея
-//! и для ресурса `.exe` (его генерирует `build.rs` из того же файла).
-
-mod grid;
+//! Источник один — `assets/app-icon.png` (512×512 RGBA). `build.rs` уменьшает
+//! её до 32×32 для трея (файл `tray-32.rgba` в `OUT_DIR`) и собирает `.ico`
+//! для ресурса exe из тех же пикселей.
 
 use tray_icon::Icon;
 
-/// Иконка приложения (единая для всех состояний).
+/// RGBA-кадр 32×32, сгенерированный сборкой из `assets/app-icon.png`.
+const TRAY_ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tray-32.rgba"));
+/// Сторона кадра трея.
+const TRAY_ICON_SIZE: u32 = 32;
+
+/// Иконка приложения для трея.
 pub fn get_icon() -> Icon {
-    Icon::from_rgba(
-        grid::rgba(grid::GRID_SIZE),
-        grid::GRID_SIZE as u32,
-        grid::GRID_SIZE as u32,
-    )
-    .unwrap_or_else(|_| {
-        // Резерв на случай ошибки в карте: 1×1 непрозрачный белый пиксель.
+    Icon::from_rgba(TRAY_ICON_RGBA.to_vec(), TRAY_ICON_SIZE, TRAY_ICON_SIZE).unwrap_or_else(|_| {
+        // Резерв на случай повреждённого кадра: 1×1 белый пиксель.
         Icon::from_rgba(vec![255; 4], 1, 1).unwrap()
     })
 }

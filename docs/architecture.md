@@ -15,7 +15,8 @@ How the project is put together: modules, event flow, and the key design decisio
 
 ```
 Cargo.toml
-build.rs            // generates the .ico from src/icon/grid.rs and embeds it
+build.rs            // generates the .ico and the 32×32 tray frame from assets/app-icon.png
+assets/app-icon.png // icon master (512×512 RGBA)
 AGENTS.md
 README.md
 docs/
@@ -30,8 +31,7 @@ src/
   hotkey/mod.rs     // global hotkey: RegisterHotKey, capture
   i18n/mod.rs       // UI localization: English / Russian by system language
   toast/mod.rs      // switch notification (tracking tooltip, auto-hide)
-  icon/mod.rs       // 16×16 pixel icon for the tray
-  icon/grid.rs      // shared pixel map (tray + executable resource)
+  icon/mod.rs       // tray icon: embedded 32×32 RGBA frame from build.rs
 ```
 
 ## Module responsibilities
@@ -73,13 +73,16 @@ handles it before dispatching. Capture works by polling `GetAsyncKeyState` over 
 (A-Z, 0-9, F1-F24, named keys) and detecting newly pressed keys.
 `Hotkey { modifiers, vk }` is serialised into the config.
 
-### `icon` + `build.rs` — shared pixel art
+### `icon` + `build.rs` — one icon for everything
 
-The tray icon and the file icon come from one source: `src/icon/grid.rs` (a 16×16 map of
-transparent / blue / white pixels). `icon::get_icon()` expands it to 16×16 RGBA for the tray, and
-`build.rs` expands it to 16/24/32/48/64/256 px, packs the images into an `.ico` (PNG entries), compiles
-it with `rc.exe` and passes the resulting `.res` to the linker. No binary assets are committed; if
-`rc.exe` is unavailable the icon is skipped with a `cargo:warning` instead of failing the build.
+The single source is `assets/app-icon.png` (512×512 RGBA). `build.rs` decodes it, downscales with an
+area-average (box) filter using premultiplied alpha — so no dark fringe on the edges — and produces:
+- a multi-size `.ico` (16/20/24/32/40/48/64/128/256, PNG entries) compiled by `rc.exe` and linked in;
+- a 32×32 RGBA frame (`tray-32.rgba` in `OUT_DIR`) that `icon::get_icon()` embeds with `include_bytes!`
+  and hands to the tray. Windows downscales it to 16/20/24 for lower DPI.
+
+No icon is drawn in code. If `rc.exe` is missing the build only warns and the executable keeps the
+default icon; if the PNG cannot be read, a transparent tray frame is used so the build still succeeds.
 
 ### `i18n` — localization
 
