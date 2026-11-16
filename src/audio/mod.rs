@@ -11,12 +11,12 @@ use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::Media::Audio::{
     eConsole, eRender, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator, IMMNotificationClient,
-    IMMNotificationClient_Impl, MMDeviceEnumerator, DEVICE_STATE, DEVICE_STATE_ACTIVE,
-    DEVICE_STATE_UNPLUGGED,
+    IMMNotificationClient_Impl, MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor, DEVICE_STATE,
+    DEVICE_STATE_ACTIVE, DEVICE_STATE_UNPLUGGED,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, STGM_READ};
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::System::Variant::VT_LPWSTR;
+use windows::Win32::System::Variant::{VT_LPWSTR, VT_UI4};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
 use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_APP};
 
@@ -30,6 +30,35 @@ pub enum DeviceState {
     Inactive,
 }
 
+/// Форм-фактор устройства вывода — так Windows классифицирует эндпоинты
+/// (используется для иконки в меню, как в настройках звука).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormFactor {
+    Speakers,
+    Headphones,
+    /// HDMI / DisplayPort (DigitalAudioDisplayDevice).
+    DisplayPort,
+    /// S/PDIF и цифровой passthrough.
+    Digital,
+    LineLevel,
+    Remote,
+    Other,
+}
+
+impl FormFactor {
+    fn from_win32(value: u32) -> Self {
+        match value {
+            1 => Self::Speakers,
+            3 | 5 => Self::Headphones, // Headphones, Headset
+            9 => Self::DisplayPort,
+            7 | 8 => Self::Digital, // UnknownDigitalPassthrough, SPDIF
+            2 => Self::LineLevel,
+            0 => Self::Remote,
+            _ => Self::Other,
+        }
+    }
+}
+
 /// Информация об одном устройстве.
 #[derive(Debug, Clone)]
 pub struct AudioDevice {
@@ -39,6 +68,8 @@ pub struct AudioDevice {
     pub name: String,
     /// Текущее состояние.
     pub state: DeviceState,
+    /// Тип устройства (для иконки в меню).
+    pub form_factor: FormFactor,
 }
 
 /// Менеджер аудиоустройств.
@@ -126,7 +157,15 @@ impl AudioManager {
                 // Определяем состояние.
                 let state = get_state(&device);
 
-                devices.push(AudioDevice { id, name, state });
+                // Форм-фактор — для иконки в меню.
+                let form_factor = get_form_factor(&device);
+
+                devices.push(AudioDevice {
+                    id,
+                    name,
+                    state,
+                    form_factor,
+                });
             }
 
             devices
@@ -228,6 +267,23 @@ fn get_state(device: &IMMDevice) -> DeviceState {
         Ok(state) if state.0 == DEVICE_STATE_ACTIVE.0 => DeviceState::Active,
         Ok(state) if state.0 == DEVICE_STATE_UNPLUGGED.0 => DeviceState::Unplugged,
         _ => DeviceState::Inactive,
+    }
+}
+
+/// Получить форм-фактор устройства (`PKEY_AudioEndpoint_FormFactor`, VT_UI4).
+fn get_form_factor(device: &IMMDevice) -> FormFactor {
+    unsafe {
+        let Some(store) = device.OpenPropertyStore(STGM_READ).ok() else {
+            return FormFactor::Other;
+        };
+        let Ok(propvar) = store.GetValue(&PKEY_AudioEndpoint_FormFactor) else {
+            return FormFactor::Other;
+        };
+        let raw = propvar.as_raw();
+        if raw.Anonymous.Anonymous.vt != VT_UI4.0 {
+            return FormFactor::Other;
+        }
+        FormFactor::from_win32(raw.Anonymous.Anonymous.Anonymous.ulVal)
     }
 }
 

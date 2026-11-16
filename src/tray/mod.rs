@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 
 use tray_icon::menu::accelerator::Accelerator;
-use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::TrayIconBuilder;
 
-use crate::audio::{AudioDevice, AudioManager};
+use crate::audio::{AudioDevice, AudioManager, FormFactor};
 use crate::config::Favorites;
 use crate::i18n;
 
@@ -52,6 +52,22 @@ impl TrayManager {
             // set_menu не возвращает Result — перестроенное меню заменяется целиком.
             tray.set_menu(Some(Box::new(menu)));
             let _ = tray.set_tooltip(Some(tooltip.as_str()));
+        }
+    }
+
+    /// Символ-иконка по типу устройства (в духе значков в настройках Windows).
+    ///
+    /// `muda` не умеет рисовать настоящие иконки в пунктах меню, поэтому тип
+    /// устройства показывается эмодзи-символом перед названием.
+    fn device_symbol(form_factor: FormFactor) -> &'static str {
+        match form_factor {
+            FormFactor::Speakers => "🔊",
+            FormFactor::Headphones => "🎧",
+            FormFactor::DisplayPort => "🖥",
+            FormFactor::Digital => "🔈",
+            FormFactor::LineLevel => "🔉",
+            FormFactor::Remote => "🌐",
+            FormFactor::Other => "🔊",
         }
     }
 
@@ -141,34 +157,39 @@ impl TrayManager {
         // Разделитель.
         let _ = menu.append(&PredefinedMenuItem::separator());
 
-        // Подменю "Избранное": избранные (с маркером текущего) + остальные устройства.
+        // Подменю «Избранное»: все устройства списком, галочка = в избранном.
+        // Клик по пункту добавляет/убирает устройство (переключение — через
+        // верхний пункт, иконку трея или хоткей).
         let favorites_submenu = Submenu::new(i18n::lang().favorites_label(), true);
 
-        for device in &fav_devices {
-            let is_active = device.id == current_device;
-            let label = format!("{} {}", if is_active { "▶" } else { "  " }, device.name);
-            let item = MenuItem::with_id(
-                format!("fav_{}", device.id),
+        let existing: std::collections::HashSet<&String> = favorites.devices.iter().collect();
+        let mut ordered: Vec<&AudioDevice> = fav_devices.iter().collect();
+        for device in &all_devices {
+            if !existing.contains(&device.id) {
+                ordered.push(device);
+            }
+        }
+
+        for device in ordered {
+            let active_marker = if device.id == current_device {
+                "▶ "
+            } else {
+                ""
+            };
+            let label = format!(
+                "{} {}{}",
+                Self::device_symbol(device.form_factor),
+                active_marker,
+                device.name
+            );
+            let item = CheckMenuItem::with_id(
+                format!("toggle_{}", device.id),
                 label,
                 true,
+                existing.contains(&device.id),
                 None::<Accelerator>,
             );
             let _ = favorites_submenu.append(&item);
-        }
-
-        // Устройства, ещё не добавленные в избранное.
-        let existing: std::collections::HashSet<&String> = favorites.devices.iter().collect();
-        for device in &all_devices {
-            if !existing.contains(&device.id) {
-                let label = format!("+ {}", device.name);
-                let item = MenuItem::with_id(
-                    format!("add_{}", device.id),
-                    label,
-                    true,
-                    None::<Accelerator>,
-                );
-                let _ = favorites_submenu.append(&item);
-            }
         }
 
         let _ = menu.append(&favorites_submenu);

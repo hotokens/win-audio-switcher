@@ -38,8 +38,10 @@ Release profile is tuned for size: `opt-level = "z"`, `lto = "fat"`, `strip = tr
 ## Usage
 
 1. Run `SwitcherProgramm.exe` — the app goes straight to the tray.
-2. Right-click the icon → **Favorites** → click `+ <device name>` to add devices.
-3. Left-click the icon to cycle between them, or press your hotkey.
+2. Right-click the icon → **Favorites** → click a device to toggle its checkbox. Checked devices form
+   the cycle; each entry is prefixed with a device-type symbol (🔊 speakers, 🎧 headphones,
+   🖥 HDMI/DisplayPort, 🔈 digital, 🔉 line level).
+3. Left-click the icon to cycle between the checked devices, or press your hotkey.
 4. To assign a hotkey: right-click → **Hotkey: …** and press the combination.
    `Esc` cancels.
 

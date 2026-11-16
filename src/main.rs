@@ -205,16 +205,6 @@ impl AppState {
         (pos, total)
     }
 
-    /// Дружелюбное имя устройства по endpoint ID (пустое — если не найдено).
-    fn device_name(&self, endpoint_id: &str) -> String {
-        self.audio
-            .list_devices()
-            .into_iter()
-            .find(|d| d.id == endpoint_id)
-            .map(|d| d.name)
-            .unwrap_or_default()
-    }
-
     /// Показать всплывающую подсказку о новом активном устройстве
     /// (у иконки трея, как при наведении; исчезает через 1 с).
     fn show_switch_toast(&mut self, device_name: &str, position: usize, total: usize) {
@@ -408,36 +398,26 @@ impl AppState {
         self.show_switch_toast(&device_name, position, total);
     }
 
-    /// Переключиться на конкретное устройство.
-    fn switch_to(&mut self, endpoint_id: &str) {
-        if let Err(e) = policy::set_default_endpoint(endpoint_id) {
-            log::error!("Failed to set default endpoint: {}", e);
-            return;
-        }
-
-        self.current_device = endpoint_id.to_string();
-        let (pos, total) = self.sync_cycle_index();
-        let device_name = self.device_name(endpoint_id);
-        self.tray.update(
-            &self.audio,
-            &self.favorites,
-            &self.current_device,
-            self.cycle_index,
-        );
-        self.show_switch_toast(&device_name, pos + 1, total);
-    }
-
-    /// Добавить устройство в избранное (клик по пункту «+ имя» в меню).
-    fn add_favorite(&mut self, endpoint_id: &str) {
-        if !self.favorites.devices.iter().any(|id| id == endpoint_id) {
+    /// Добавить или убрать устройство из избранного (клик по пункту-галочке).
+    fn toggle_favorite(&mut self, endpoint_id: &str) {
+        if let Some(index) = self
+            .favorites
+            .devices
+            .iter()
+            .position(|id| id == endpoint_id)
+        {
+            self.favorites.devices.remove(index);
+        } else {
             self.favorites.devices.push(endpoint_id.to_string());
-
-            // Сохраняем конфиг при каждом изменении избранного (требование AGENTS.md).
-            if let Err(e) = config::save_favorites(&self.favorites) {
-                log::error!("Failed to save favorites: {}", e);
-            }
         }
 
+        // Сохраняем конфиг при каждом изменении избранного (требование AGENTS.md).
+        if let Err(e) = config::save_favorites(&self.favorites) {
+            log::error!("Failed to save favorites: {}", e);
+        }
+
+        // Убрали текущее устройство из цикла — позиция могла измениться.
+        self.sync_cycle_index();
         self.tray.update(
             &self.audio,
             &self.favorites,
@@ -585,9 +565,9 @@ fn run_event_loop(state: &mut AppState) {
 /// Схема ID (см. `tray::build_ui`):
 /// - `"cycle"` — циклическое переключение;
 /// - `"hotkey"` — начать захват глобальной горячей клавиши;
+/// - `"version"` — неактивная строка с версией;
 /// - `"exit"` — выход;
-/// - `"fav_<endpoint_id>"` — переключиться на избранное устройство;
-/// - `"add_<endpoint_id>"` — добавить устройство в избранное.
+/// - `"toggle_<endpoint_id>"` — добавить/убрать устройство из избранного.
 fn dispatch_menu_event(state: &mut AppState, id: &str) -> bool {
     match id {
         "cycle" => state.cycle_next(),
@@ -595,8 +575,7 @@ fn dispatch_menu_event(state: &mut AppState, id: &str) -> bool {
         "version" => {} // неактивная строка, событий не приходит
         "exit" => return true,
         "empty" => {} // пункт-подсказка, отключён — событий не должно приходить
-        _ if id.starts_with("fav_") => state.switch_to(&id["fav_".len()..]),
-        _ if id.starts_with("add_") => state.add_favorite(&id["add_".len()..]),
+        _ if id.starts_with("toggle_") => state.toggle_favorite(&id["toggle_".len()..]),
         _ => log::warn!("Unknown menu item id: {}", id),
     }
     false
@@ -633,7 +612,10 @@ fn cli_mode(args: &[String]) -> i32 {
                 } else {
                     ""
                 };
-                println!("[{}] (state: {:?}) {}{}", i, d.state, d.name, marker);
+                println!(
+                    "[{}] (state: {:?}, form: {:?}) {}{}",
+                    i, d.state, d.form_factor, d.name, marker
+                );
             }
             if devices.is_empty() {
                 println!("No render devices found.");
