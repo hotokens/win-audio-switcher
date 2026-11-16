@@ -15,7 +15,8 @@ How the project is put together: modules, event flow, and the key design decisio
 
 ```
 Cargo.toml
-build.rs            // generates the .ico and the 32×32 tray frame from assets/app-icon.png
+build.rs            // generates the .ico, the manifest and the build number
+build-number.txt    // build counter, incremented on release builds
 assets/app-icon.png // icon master (512×512 RGBA)
 AGENTS.md
 README.md
@@ -30,9 +31,17 @@ src/
   tray/mod.rs       // icon, menu, tooltip
   hotkey/mod.rs     // global hotkey: RegisterHotKey, capture
   i18n/mod.rs       // UI localization: English / Russian by system language
+  version.rs        // "0.1.0+build.N" from Cargo.toml + build.rs
   toast/mod.rs      // switch notification (tracking tooltip, auto-hide)
   icon/mod.rs       // tray icon: embedded 32×32 RGBA frame from build.rs
 ```
+
+## Executable manifest
+
+`build.rs` writes an application manifest and embeds it as `RT_MANIFEST` (resource id `1`) together
+with the icon: common controls **v6** (modern tooltips and menus instead of comctl32 v5.82),
+**PerMonitorV2** DPI awareness (crisp rendering on HiDPI and across monitors) and Windows 10/11
+`supportedOS`. Without `rc.exe` both resources are skipped with a warning.
 
 ## Module responsibilities
 
@@ -98,6 +107,12 @@ A `tooltips_class32` window in `TTF_TRACK | TTF_ABSOLUTE` mode:
 (below the icon, or above it when there is no room) clamped to the monitor work area →
 send `TTM_TRACKPOSITION` again. Auto-hide is a 1-second `SetTimer`, handled as `WM_TIMER`
 in the owner window's `WndProc`.
+
+Look and feel matches Shell tooltips: the v6 manifest enables themed rendering, and before every show
+the window gets `SetWindowTheme(hwnd, "DarkMode_Explorer")` when dark mode is on
+(`ShouldAppsUseDarkMode` from `uxtheme.dll`, ordinal 132 — undocumented, so any failure falls back to
+the light theme). `WM_SETTINGCHANGE`/`WM_THEMECHANGED` re-apply the theme, and because message-only
+windows miss broadcasts, it is also re-applied on each show.
 
 ## Event flow
 

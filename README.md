@@ -76,7 +76,18 @@ SwitcherProgramm.exe --switch <N>    # make device N the system default
 SwitcherProgramm.exe --toast-test    # verify the notification: visibility, position, auto-hide
 SwitcherProgramm.exe --hotkey-test   # verify reserved-combo rejection and WM_HOTKEY delivery
 SwitcherProgramm.exe --lang          # print the detected UI language and sample strings
+SwitcherProgramm.exe --version       # print the version with the build number
 ```
+
+## Versioning
+
+The version is `Cargo.toml` version plus a build number: `0.1.0+build.42`. It is shown as a disabled
+line above “Exit” in the tray menu.
+
+- The build number lives in `build-number.txt` and is incremented by `build.rs` on release builds only;
+  debug builds reuse the stored value.
+- `SWITCHER_BUILD_NUMBER` overrides it (CI or a manual release) without touching the file.
+- Commit the updated `build-number.txt` together with the release commit.
 
 ## How it works
 

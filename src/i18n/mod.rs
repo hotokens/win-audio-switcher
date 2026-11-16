@@ -136,6 +136,14 @@ impl Lang {
             Self::Ru => "Hot-key не задан",
         }
     }
+
+    /// Строка версии в меню: «Version 0.1.0+build.42».
+    pub fn version_label(self, version: &str) -> String {
+        match self {
+            Self::En => format!("Version {}", version),
+            Self::Ru => format!("Версия {}", version),
+        }
+    }
 }
 
 static LANG: OnceLock<Lang> = OnceLock::new();
@@ -191,5 +199,13 @@ mod tests {
         assert_eq!(Lang::En.device_position(2, 4), "Device: 2 of 4");
         assert_eq!(Lang::En.hotkey_item("Ctrl + U"), "Hotkey: Ctrl + U");
         assert_eq!(Lang::Ru.hotkey_unset(), "Hot-key переключатель: не задан");
+        assert_eq!(
+            Lang::En.version_label("0.1.0+build.7"),
+            "Version 0.1.0+build.7"
+        );
+        assert_eq!(
+            Lang::Ru.version_label("0.1.0+build.7"),
+            "Версия 0.1.0+build.7"
+        );
     }
 }

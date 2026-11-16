@@ -19,6 +19,11 @@ const TRAY_SIZE: u32 = 32;
 fn main() {
     println!("cargo:rerun-if-changed=assets/app-icon.png");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=SWITCHER_BUILD_NUMBER");
+
+    // Номер сборки: env → build-number.txt (инкремент только в release).
+    let number = build_number();
+    println!("cargo:rustc-env=SWITCHER_BUILD_NUMBER={}", number);
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
 
@@ -185,17 +190,30 @@ fn encode_png(size: u32, rgba: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Err
     Ok(png)
 }
 
-/// Скомпилировать `.ico` в `.res` и передать линкеру.
+/// Скомпилировать `.ico` и манифест в `.res` и передать линкеру.
 fn embed_as_resource(out_dir: &Path, ico_path: &Path) {
     let Some(rc) = find_rc() else {
-        println!("cargo:warning=rc.exe not found; the .exe will use the default icon");
+        println!(
+            "cargo:warning=rc.exe not found; the .exe will use the default icon and no manifest"
+        );
         return;
     };
 
+    let manifest_path = out_dir.join("app.manifest");
+    if let Err(e) = std::fs::write(&manifest_path, APP_MANIFEST) {
+        println!("cargo:warning=cannot write app.manifest: {}", e);
+    }
+
     let rc_file = out_dir.join("app.rc");
-    // В .rc обратные слэши экранируются, путь — в кавычках.
+    // В .rc обратные слэши экранируются, пути — в кавычках.
+    // 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID, 24 = RT_MANIFEST.
     let ico_escaped = ico_path.to_string_lossy().replace('\\', "\\\\");
-    if let Err(e) = std::fs::write(&rc_file, format!("1 ICON \"{}\"\n", ico_escaped)) {
+    let manifest_escaped = manifest_path.to_string_lossy().replace('\\', "\\\\");
+    let rc_text = format!(
+        "1 ICON \"{}\"\n1 24 \"{}\"\n",
+        ico_escaped, manifest_escaped
+    );
+    if let Err(e) = std::fs::write(&rc_file, rc_text) {
         println!("cargo:warning=cannot write app.rc: {}", e);
         return;
     }
@@ -214,6 +232,72 @@ fn embed_as_resource(out_dir: &Path, ico_path: &Path) {
         Ok(status) => println!("cargo:warning=rc.exe failed with {}; icon skipped", status),
         Err(e) => println!("cargo:warning=cannot run rc.exe: {}; icon skipped", e),
     }
+}
+
+/// Манифест приложения: comctl32 v6 (современные тултипы и меню),
+/// PerMonitorV2 (чёткость на HiDPI) и поддержка Windows 10/11.
+const APP_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="SwitcherProgramm" version="1.0.0.0" processorArchitecture="*"/>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+    </windowsSettings>
+  </application>
+</assembly>
+"#;
+
+/// Номер сборки.
+///
+/// Приоритет: переменная `SWITCHER_BUILD_NUMBER` (CI/ручной релиз) → счётчик
+/// в `build-number.txt` (коммитится). Счётчик увеличивается только при
+/// release-сборке и пишется атомарно (tmp + rename). Файл намеренно не в
+/// `rerun-if-changed`, иначе сборка зациклится на собственном изменении.
+fn build_number() -> u64 {
+    if let Ok(value) = std::env::var("SWITCHER_BUILD_NUMBER") {
+        match value.trim().parse::<u64>() {
+            Ok(number) => return number,
+            Err(_) => println!(
+                "cargo:warning=SWITCHER_BUILD_NUMBER is not a number: {:?}",
+                value
+            ),
+        }
+    }
+
+    let path = Path::new("build-number.txt");
+    let current = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let is_release = std::env::var("PROFILE").as_deref() == Ok("release");
+    if !is_release {
+        return current;
+    }
+
+    let next = current + 1;
+    let temp = path.with_extension("txt.tmp");
+    let written =
+        std::fs::write(&temp, format!("{}\n", next)).and_then(|_| std::fs::rename(&temp, path));
+    if let Err(e) = written {
+        println!(
+            "cargo:warning=cannot update build-number.txt ({}); keeping {}",
+            e, current
+        );
+        return current;
+    }
+    next
 }
 
 /// Резервный кадр трея (прозрачный), если PNG не прочитался.

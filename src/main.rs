@@ -10,6 +10,7 @@ mod icon;
 mod policy;
 mod toast;
 mod tray;
+mod version;
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -591,6 +592,7 @@ fn dispatch_menu_event(state: &mut AppState, id: &str) -> bool {
     match id {
         "cycle" => state.cycle_next(),
         "hotkey" => state.start_capture(),
+        "version" => {} // неактивная строка, событий не приходит
         "exit" => return true,
         "empty" => {} // пункт-подсказка, отключён — событий не должно приходить
         _ if id.starts_with("fav_") => state.switch_to(&id["fav_".len()..]),
@@ -825,10 +827,15 @@ fn cli_mode(args: &[String]) -> i32 {
             println!("menu favorites:  {}", lang.favorites_label());
             println!("menu exit:       {}", lang.exit_label());
             println!("toast:           {}", lang.device_position(1, 3));
+            println!("menu version:    {}", lang.version_label(&version::full()));
+            0
+        }
+        Some("--version") => {
+            println!("{}", version::full());
             0
         }
         _ => {
-            eprintln!("Usage: SwitcherProgramm.exe --list | --switch <index> | --toast-test | --hotkey-test | --lang");
+            eprintln!("Usage: SwitcherProgramm.exe --list | --switch <index> | --toast-test | --hotkey-test | --lang | --version");
             2
         }
     }

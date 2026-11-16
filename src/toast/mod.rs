@@ -10,22 +10,22 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use windows::core::{w, PWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::core::{w, PCSTR, PWSTR};
+use windows::Win32::Foundation::{BOOL, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::Controls::{
-    InitCommonControls, TOOLTIPS_CLASS, TTF_ABSOLUTE, TTF_TRACK, TTM_ADDTOOLW, TTM_SETMAXTIPWIDTH,
-    TTM_TRACKACTIVATE, TTM_TRACKPOSITION, TTM_UPDATETIPTEXTW, TTS_ALWAYSTIP, TTS_NOPREFIX,
-    TTTOOLINFOW,
+    InitCommonControls, SetWindowTheme, TOOLTIPS_CLASS, TTF_ABSOLUTE, TTF_TRACK, TTM_ADDTOOLW,
+    TTM_SETMAXTIPWIDTH, TTM_TRACKACTIVATE, TTM_TRACKPOSITION, TTM_UPDATETIPTEXTW, TTS_ALWAYSTIP,
+    TTS_NOPREFIX, TTTOOLINFOW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetSystemMetrics, GetWindowRect,
     IsWindowVisible, KillTimer, RegisterClassW, SendMessageW, SetTimer, HWND_MESSAGE, SM_CXSCREEN,
-    SM_CYSCREEN, WINDOW_EX_STYLE, WINDOW_STYLE, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    SM_CYSCREEN, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER,
+    WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// ID таймера авто-скрытия.
@@ -42,12 +42,11 @@ const MAX_TIP_WIDTH: i32 = 320;
 const TOAST_GAP: i32 = 6;
 /// Размер структуры `TOOLINFO` версии V2 — без финального поля `lpReserved`.
 ///
-/// Проверено на живой системе: полный размер `size_of::<TTTOOLINFOW>()`
-/// (V3, 72 байта на x64) наш comctl32 **отвергает** — `TTM_ADDTOOLW`
-/// возвращает FALSE, и тултип никогда не появляется. Причина: встроенный
-/// comctl32 (v5.82, приложение без v6-манифеста) знает структуру только
-/// до V2. V2-размер = полный минус один указатель, и корректен на любой
-/// разрядности.
+/// С comctl32 v5 (без манифеста) полный размер V3 отвергается: `TTM_ADDTOOLW`
+/// возвращает FALSE, и тултип никогда не появляется. После включения манифеста
+/// v6 полный размер принимается, но V2 совместим с обеими версиями comctl32 —
+/// поэтому оставляем его. V2-размер = полный минус один указатель и корректен
+/// на любой разрядности.
 const TOOLINFO_SIZE: u32 =
     (std::mem::size_of::<TTTOOLINFOW>() - std::mem::size_of::<*mut std::ffi::c_void>()) as u32;
 
@@ -85,6 +84,38 @@ unsafe fn deactivate_tooltip() {
     );
 }
 
+/// Тёмная тема приложений Windows включена?
+///
+/// Недокументированный `ShouldAppsUseDarkMode` из `uxtheme.dll` (ординал 132).
+/// Любая ошибка/отсутствие функции → светлая тема (безопасный дефолт).
+fn apps_use_dark_mode() -> bool {
+    type ShouldAppsUseDarkMode = unsafe extern "system" fn() -> BOOL;
+    unsafe {
+        let Ok(module) = LoadLibraryW(w!("uxtheme.dll")) else {
+            return false;
+        };
+        let Some(proc) = GetProcAddress(module, PCSTR(132 as *const u8)) else {
+            return false;
+        };
+        let query: ShouldAppsUseDarkMode = std::mem::transmute(proc);
+        query().as_bool()
+    }
+}
+
+/// Применить к тултипу системную тему (тёмную или светлую).
+///
+/// SAFETY: `tooltip` — валидное окно класса `tooltips_class32`.
+unsafe fn apply_tooltip_theme(tooltip: HWND) {
+    let sub_app = if apps_use_dark_mode() {
+        w!("DarkMode_Explorer")
+    } else {
+        w!("")
+    };
+    if let Err(e) = SetWindowTheme(tooltip, sub_app, w!("")) {
+        log::debug!("Toast: SetWindowTheme failed: {}", e);
+    }
+}
+
 unsafe extern "system" fn toast_wndproc(
     hwnd: HWND,
     msg: u32,
@@ -95,6 +126,15 @@ unsafe extern "system" fn toast_wndproc(
         deactivate_tooltip();
         let _ = KillTimer(hwnd, TIMER_ID);
         return LRESULT(0);
+    }
+    // Смена темы Windows — переприменяем, чтобы не требовался перезапуск.
+    // (Message-only окна широковещательные сообщения не получают, поэтому
+    // тема также обновляется в `show_anchored` перед каждым показом.)
+    if msg == WM_SETTINGCHANGE || msg == WM_THEMECHANGED {
+        let tooltip = TOOLTIP_HWND.load(Ordering::Relaxed);
+        if tooltip != 0 {
+            apply_tooltip_theme(HWND(tooltip as *mut _));
+        }
     }
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
@@ -277,6 +317,7 @@ impl Toast {
             );
 
             TOOLTIP_HWND.store(tooltip.0 as usize, Ordering::Relaxed);
+            apply_tooltip_theme(tooltip);
             self.text_buf = Some(buf);
             self.tooltip = Some(tooltip);
             Some(tooltip)
@@ -308,6 +349,9 @@ impl Toast {
         buf[len] = 0;
 
         unsafe {
+            // Тема могла смениться с момента создания окна — обновляем.
+            apply_tooltip_theme(tooltip);
+
             let ti = TTTOOLINFOW {
                 cbSize: TOOLINFO_SIZE,
                 uFlags: TTF_TRACK | TTF_ABSOLUTE,

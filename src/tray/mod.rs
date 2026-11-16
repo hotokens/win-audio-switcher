@@ -176,6 +176,15 @@ impl TrayManager {
         // Разделитель.
         let _ = menu.append(&PredefinedMenuItem::separator());
 
+        // Версия приложения: неактивная строка над «Выход».
+        let version_item = MenuItem::with_id(
+            "version",
+            i18n::lang().version_label(&crate::version::full()),
+            false,
+            None::<Accelerator>,
+        );
+        let _ = menu.append(&version_item);
+
         // «Выход»: завершает приложение (обрабатывается в event loop по id "exit").
         let exit = MenuItem::with_id("exit", i18n::lang().exit_label(), true, None::<Accelerator>);
         let _ = menu.append(&exit);
