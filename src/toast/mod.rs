@@ -1,12 +1,12 @@
-//! Всплывающая подсказка при переключении устройства.
+//! Popup hint shown when the output device is switched.
 //!
-//! Тот же Win32-механизм, что и системный тултип при наведении на иконку
-//! в трее: окно класса `tooltips_class32`, показываемое через
-//! `TTM_TRACKACTIVATE` + `TTM_TRACKPOSITION` в режиме
-//! `TTF_TRACK | TTF_ABSOLUTE` (появляется ровно в заданной точке экрана).
+//! The same Win32 mechanism as the system tooltip shown when hovering over a
+//! tray icon: a window of class `tooltips_class32`, shown through
+//! `TTM_TRACKACTIVATE` + `TTM_TRACKPOSITION` in
+//! `TTF_TRACK | TTF_ABSOLUTE` mode (it appears exactly at the given screen point).
 //!
-//! Авто-скрытие через `SetTimer` (1 с): таймер посылает `WM_TIMER` нашему
-//! скрытому окну-владельцу, в его `WndProc` мы деактивируем тултип.
+//! Auto-hide via `SetTimer` (1 s): the timer sends `WM_TIMER` to our hidden
+//! owner window, and in its `WndProc` we deactivate the tooltip.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -28,37 +28,37 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-/// ID таймера авто-скрытия.
+/// Auto-hide timer ID.
 const TIMER_ID: usize = 1;
-/// Сколько времени висит подсказка.
+/// How long the hint stays visible.
 const DURATION_MS: u32 = 1000;
-/// ID «tool» внутри тултипа (любое; у нас один tool на всё время жизни).
+/// ID of the "tool" inside the tooltip (arbitrary; we have one tool for the whole lifetime).
 const TOOL_ID: usize = 1;
-/// Размер UTF-16 буфера текста (буфер один, переиспользуется).
+/// Size of the UTF-16 text buffer (single buffer, reused).
 const MAX_TEXT: usize = 512;
-/// Ширина тултипа для переноса строк (в пикселях).
+/// Tooltip width for line wrapping (in pixels).
 const MAX_TIP_WIDTH: i32 = 320;
-/// Отступ подсказки от иконки/курсора.
+/// Offset of the hint from the icon/cursor.
 const TOAST_GAP: i32 = 6;
-/// Размер структуры `TOOLINFO` версии V2 — без финального поля `lpReserved`.
+/// Size of the V2 `TOOLINFO` structure — without the trailing `lpReserved` field.
 ///
-/// С comctl32 v5 (без манифеста) полный размер V3 отвергается: `TTM_ADDTOOLW`
-/// возвращает FALSE, и тултип никогда не появляется. После включения манифеста
-/// v6 полный размер принимается, но V2 совместим с обеими версиями comctl32 —
-/// поэтому оставляем его. V2-размер = полный минус один указатель и корректен
-/// на любой разрядности.
+/// With comctl32 v5 (no manifest) the full V3 size is rejected: `TTM_ADDTOOLW`
+/// returns FALSE and the tooltip never appears. After the v6 manifest is
+/// enabled the full size is accepted, but V2 is compatible with both comctl32
+/// versions — so we keep it. The V2 size = full size minus one pointer and is
+/// correct on any bitness.
 const TOOLINFO_SIZE: u32 =
     (std::mem::size_of::<TTTOOLINFOW>() - std::mem::size_of::<*mut std::ffi::c_void>()) as u32;
 
-/// HWND тултипа и окна-владельца — нужны в WndProc (таймер приходит туда
-/// без ссылки на структуру). Всё живёт в главном потоке, атомики — чтобы
-/// обойти требование static.
+/// HWND of the tooltip and the owner window — needed in WndProc (the timer
+/// arrives there without a reference to the structure). Everything lives on
+/// the main thread; the atomics exist to satisfy the static requirement.
 static TOOLTIP_HWND: AtomicUsize = AtomicUsize::new(0);
 static OWNER_HWND: AtomicUsize = AtomicUsize::new(0);
 
-/// Деактивировать тултип (в обработчике таймера).
+/// Deactivate the tooltip (in the timer handler).
 ///
-/// SAFETY: вызывается только из `toast_wndproc` (главный поток).
+/// SAFETY: called only from `toast_wndproc` (main thread).
 unsafe fn deactivate_tooltip() {
     let tt = TOOLTIP_HWND.load(Ordering::Relaxed);
     if tt == 0 {
@@ -67,8 +67,8 @@ unsafe fn deactivate_tooltip() {
     let tooltip = HWND(tt as *mut _);
     let owner = HWND(OWNER_HWND.load(Ordering::Relaxed) as *mut _);
 
-    // Для TTM_TRACKACTIVATE нужен toolinfo, идентифицирующий tool:
-    // cbSize/uFlags/hwnd/uId; lpszText не требуется.
+    // TTM_TRACKACTIVATE needs a toolinfo identifying the tool:
+    // cbSize/uFlags/hwnd/uId; lpszText is not required.
     let ti = TTTOOLINFOW {
         cbSize: TOOLINFO_SIZE,
         uFlags: TTF_TRACK | TTF_ABSOLUTE,
@@ -84,10 +84,10 @@ unsafe fn deactivate_tooltip() {
     );
 }
 
-/// Тёмная тема приложений Windows включена?
+/// Is the dark theme for Windows apps enabled?
 ///
-/// Недокументированный `ShouldAppsUseDarkMode` из `uxtheme.dll` (ординал 132).
-/// Любая ошибка/отсутствие функции → светлая тема (безопасный дефолт).
+/// Undocumented `ShouldAppsUseDarkMode` from `uxtheme.dll` (ordinal 132).
+/// Any error or missing function → light theme (safe default).
 fn apps_use_dark_mode() -> bool {
     type ShouldAppsUseDarkMode = unsafe extern "system" fn() -> BOOL;
     unsafe {
@@ -102,9 +102,9 @@ fn apps_use_dark_mode() -> bool {
     }
 }
 
-/// Применить к тултипу системную тему (тёмную или светлую).
+/// Apply the system theme (dark or light) to the tooltip.
 ///
-/// SAFETY: `tooltip` — валидное окно класса `tooltips_class32`.
+/// SAFETY: `tooltip` is a valid window of class `tooltips_class32`.
 unsafe fn apply_tooltip_theme(tooltip: HWND) {
     let sub_app = if apps_use_dark_mode() {
         w!("DarkMode_Explorer")
@@ -127,9 +127,9 @@ unsafe extern "system" fn toast_wndproc(
         let _ = KillTimer(hwnd, TIMER_ID);
         return LRESULT(0);
     }
-    // Смена темы Windows — переприменяем, чтобы не требовался перезапуск.
-    // (Message-only окна широковещательные сообщения не получают, поэтому
-    // тема также обновляется в `show_anchored` перед каждым показом.)
+    // Windows theme changed — reapply so no restart is required.
+    // (Message-only windows do not receive broadcast messages, so the theme
+    // is also refreshed in `show_anchored` before every display.)
     if msg == WM_SETTINGCHANGE || msg == WM_THEMECHANGED {
         let tooltip = TOOLTIP_HWND.load(Ordering::Relaxed);
         if tooltip != 0 {
@@ -139,16 +139,16 @@ unsafe extern "system" fn toast_wndproc(
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
-/// Упаковать экранные координаты в `LPARAM` для `TTM_TRACKPOSITION`:
-/// младшее слово — x, старшее — y (аналог макроса MAKELONG).
+/// Pack screen coordinates into an `LPARAM` for `TTM_TRACKPOSITION`:
+/// low word is x, high word is y (equivalent to the MAKELONG macro).
 fn makelong(x: i32, y: i32) -> isize {
     (((y as u32 as u16 as u32) << 16) | (x as u32 as u16 as u32)) as isize
 }
 
-/// Рабочая область монитора, ближайшего к точке (x, y), в экранных
-/// координатах: `(left, top, right, bottom)` без панели задач.
+/// Work area of the monitor nearest to the point (x, y), in screen
+/// coordinates: `(left, top, right, bottom)` without the taskbar.
 ///
-/// SAFETY: обычный запрос к Win32, без побочных эффектов.
+/// SAFETY: a plain Win32 query with no side effects.
 unsafe fn work_area_at(x: i32, y: i32) -> (i32, i32, i32, i32) {
     let mut info = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -163,7 +163,7 @@ unsafe fn work_area_at(x: i32, y: i32) -> (i32, i32, i32, i32) {
             info.rcWork.bottom,
         )
     } else {
-        // Fallback: весь экран без учёта панели задач.
+        // Fallback: the whole screen, ignoring the taskbar.
         (
             0,
             0,
@@ -173,11 +173,11 @@ unsafe fn work_area_at(x: i32, y: i32) -> (i32, i32, i32, i32) {
     }
 }
 
-/// Менеджер всплывающей подсказки.
+/// Popup hint manager.
 ///
-/// Окно-владелец создаётся сразу (скрытое, message-only), тултип — лениво
-/// при первом показе; текст хранится в закреплённом UTF-16 буфере
-/// (`lpszText` тултипа обязан оставаться валидным между сообщениями).
+/// The owner window is created right away (hidden, message-only); the tooltip
+/// is created lazily on first display; the text is kept in a pinned UTF-16 buffer
+/// (the tooltip's `lpszText` must remain valid between messages).
 pub struct Toast {
     owner: Option<HWND>,
     tooltip: Option<HWND>,
@@ -185,19 +185,19 @@ pub struct Toast {
 }
 
 impl Toast {
-    /// Создать менеджер (регистрирует класс + скрытое окно-владелец).
+    /// Create the manager (registers the class + hidden owner window).
     pub fn new() -> Self {
         unsafe {
             let hinstance = match GetModuleHandleW(None) {
-                Ok(h) => HINSTANCE(h.0), // HMODULE и HINSTANCE — один и тот же указатель
+                Ok(h) => HINSTANCE(h.0), // HMODULE and HINSTANCE are the same pointer
                 Err(e) => {
                     log::error!("Toast: GetModuleHandleW failed: {}", e);
                     return Self::empty();
                 }
             };
 
-            // Класс tooltips_class32 регистрируется comctl32; гарантированно
-            // загружаем common controls.
+            // The tooltips_class32 class is registered by comctl32; make sure
+            // common controls are loaded.
             InitCommonControls();
 
             let class_name = w!("SwitcherProgramm.ToastOwner");
@@ -209,8 +209,8 @@ impl Toast {
             };
             RegisterClassW(&wc);
 
-            // Message-only окно (родитель HWND_MESSAGE): не видно нигде,
-            // нужно только как владелец tool и получатель WM_TIMER.
+            // Message-only window (parent HWND_MESSAGE): visible nowhere,
+            // needed only as the tool owner and the WM_TIMER recipient.
             let owner = match CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 class_name,
@@ -249,7 +249,7 @@ impl Toast {
         }
     }
 
-    /// Лениво создать окно тултипа и зарегистрировать в нём «tool».
+    /// Lazily create the tooltip window and register a "tool" in it.
     fn ensure_tooltip(&mut self) -> Option<HWND> {
         if self.tooltip.is_some() {
             return self.tooltip;
@@ -295,7 +295,7 @@ impl Toast {
                 ..TTTOOLINFOW::default()
             };
 
-            // TTM_ADDTOOLW возвращает TRUE/FALSE в своём результате.
+            // TTM_ADDTOOLW returns TRUE/FALSE as its result.
             let added = SendMessageW(
                 tooltip,
                 TTM_ADDTOOLW,
@@ -308,7 +308,7 @@ impl Toast {
                     std::io::Error::last_os_error()
                 );
             }
-            // Разрешаем многострочный текст.
+            // Allow multi-line text.
             SendMessageW(
                 tooltip,
                 TTM_SETMAXTIPWIDTH,
@@ -324,13 +324,13 @@ impl Toast {
         }
     }
 
-    /// Показать подсказку рядом с прямоугольником `anchor` (left, top,
-    /// right, bottom) в экранных координатах — обычно это иконка в трее.
+    /// Show the hint next to the `anchor` rectangle (left, top, right,
+    /// bottom) in screen coordinates — usually the tray icon.
     ///
-    /// Предпочитает позицию под прямоугольником; если там нет места
-    /// (типичный случай: панель задач у нижней кромки экрана) — над ним.
-    /// Итоговая позиция всегда зажимается в рабочую область монитора,
-    /// поэтому подсказка не может «уехать» за границу экрана.
+    /// Prefers the position below the rectangle; if there is no room there
+    /// (the typical case: taskbar at the bottom edge of the screen) — above it.
+    /// The final position is always clamped into the monitor work area,
+    /// so the hint can never "drift" off the screen edge.
     pub fn show_anchored(&mut self, text: &str, anchor: (i32, i32, i32, i32)) {
         let Some(owner) = self.owner else { return };
         let Some(tooltip) = self.ensure_tooltip() else {
@@ -340,7 +340,7 @@ impl Toast {
             return;
         };
 
-        // Текст в UTF-16 + нулевой терминатор, с усечением под буфер.
+        // Text to UTF-16 + null terminator, truncated to fit the buffer.
         let mut len = 0usize;
         for unit in text.encode_utf16().take(MAX_TEXT - 1) {
             buf[len] = unit;
@@ -349,7 +349,7 @@ impl Toast {
         buf[len] = 0;
 
         unsafe {
-            // Тема могла смениться с момента создания окна — обновляем.
+            // The theme may have changed since the window was created — refresh it.
             apply_tooltip_theme(tooltip);
 
             let ti = TTTOOLINFOW {
@@ -361,7 +361,7 @@ impl Toast {
                 ..TTTOOLINFOW::default()
             };
 
-            // Обновляем текст.
+            // Update the text.
             SendMessageW(
                 tooltip,
                 TTM_UPDATETIPTEXTW,
@@ -372,8 +372,8 @@ impl Toast {
             let (left, top, right, bottom) = anchor;
             let center_x = (left + right) / 2;
 
-            // Активируем в временной точке — размер окна известен только
-            // после активации (тултип сам подбирает ширину/высоту под текст).
+            // Activate at a temporary point — the window size is known only
+            // after activation (the tooltip sizes itself to fit the text).
             SendMessageW(
                 tooltip,
                 TTM_TRACKPOSITION,
@@ -387,8 +387,8 @@ impl Toast {
                 LPARAM(&ti as *const _ as isize),
             );
 
-            // Измеряем окно и ставим его по-настоящему: под якорем, если
-            // помещается, иначе над ним; всё — внутри рабочей области.
+            // Measure the window and place it for real: below the anchor if it
+            // fits, otherwise above it; all within the work area.
             let mut wr = RECT::default();
             if GetWindowRect(tooltip, &mut wr).is_ok() {
                 let w = wr.right - wr.left;
@@ -398,7 +398,7 @@ impl Toast {
                 let mut x = center_x - w / 2;
                 let mut y = bottom + TOAST_GAP;
                 if y + h > work_bottom {
-                    // Снизу не помещается (иконка у нижней кромки) — над якорем.
+                    // Does not fit below (icon at the bottom edge) — place above the anchor.
                     y = top - h - TOAST_GAP;
                 }
                 x = x.clamp(work_left, (work_right - w).max(work_left));
@@ -420,8 +420,8 @@ impl Toast {
                 );
             }
 
-            // (Пере)запуск таймера авто-скрытия: SetTimer с тем же ID
-            // сбрасывает предыдущий таймер.
+            // (Re)start the auto-hide timer: SetTimer with the same ID
+            // resets the previous timer.
             let timer_id = SetTimer(owner, TIMER_ID, DURATION_MS, None);
             if timer_id == 0 {
                 log::error!("Toast: SetTimer failed");
@@ -429,7 +429,7 @@ impl Toast {
         }
     }
 
-    /// Диагностика (`--toast-test`): виден ли тултип прямо сейчас.
+    /// Diagnostics (`--toast-test`): is the tooltip visible right now.
     pub fn debug_is_visible(&self) -> bool {
         match self.tooltip {
             Some(hwnd) => unsafe { IsWindowVisible(hwnd).as_bool() },
@@ -437,8 +437,8 @@ impl Toast {
         }
     }
 
-    /// Диагностика (`--toast-test`): прямоугольник окна тултипа
-    /// (left, top, right, bottom) в экранных координатах.
+    /// Diagnostics (`--toast-test`): the tooltip window rectangle
+    /// (left, top, right, bottom) in screen coordinates.
     pub fn debug_rect(&self) -> Option<(i32, i32, i32, i32)> {
         let hwnd = self.tooltip?;
         let mut r = RECT::default();

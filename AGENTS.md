@@ -1,51 +1,51 @@
 # AGENTS.md
 
-Инструкции для AI-агентов, работающих с этим репозиторием.
+Instructions for AI agents working with this repository.
 
-## Проект
+## Project
 
-Windows-приложение в системном трее (Rust), переключает устройство звукового вывода.
-Окна нет: процесс живёт в фоне, UI — иконка трея и её меню.
+Windows tray application (Rust) that switches the default audio output device.
+There is no window: it runs in the background, and the UI is the tray icon and its menu.
 
-Справочник по используемым Win32/COM API: [docs/windows-apis.md](docs/windows-apis.md) — сверяться при любой работе с COM/Win32.
+Win32/COM reference: [docs/windows-apis.md](docs/windows-apis.md) — consult it first for any COM/Win32 work.
 
-## Обязательное поведение
+## Required behaviour
 
-- ЛКМ по иконке — циклическое переключение среди **избранных** устройств; ПКМ — меню.
-- Неизбранные устройства в цикле не участвуют; отключённые избранные пропускаются, но остаются в конфиге.
-- Избранное редактируется в подменю «Избранное»: каждый пункт — галочка (отмечен = в избранном),
-  клик добавляет/убирает и сохраняет конфиг; иконка пункта — тип устройства
-  (`PKEY_AudioEndpoint_FormFactor`). Переключение — ЛКМ по иконке, верхний пункт меню или хоткей.
-- Единственное избранное устройство → клик ничего не переключает; пустое избранное → цикл недоступен.
-- После каждого переключения — короткая подсказка у иконки (1 с) с именем и позицией в цикле.
-- Одиночный экземпляр: повторный запуск не создаёт второй экземпляр.
-- Пользователь может задать глобальный хоткей; он работает из любого приложения.
-- Интерфейс локализован: русский для русской Windows, английский для остальных;
-  переопределение — переменная окружения `SWITCHER_LANG=en|ru`.
-- Изменения в системе подхватываются автоматически: устройства вставили/вынули,
-  сменили default извне — меню, тултип и позиция в цикле обновляются сами.
+- Left click the tray icon — cycle through **favourite** devices; right click — the menu.
+- Non-favourite devices never take part in the cycle; unplugged favourites are skipped but stay in the config.
+- Favourites are edited in the “Favorites” submenu: every entry is a checkbox (checked = favourite),
+  clicking adds or removes it and saves the config; the entry symbol is the device type
+  (`PKEY_AudioEndpoint_FormFactor`). Switching is done with a left click, the top menu item or the hotkey.
+- A single favourite → a click does nothing; empty favourites → the cycle is unavailable.
+- After every switch — a short toast near the icon (1 s) with the name and position in the cycle.
+- Single instance: a second launch does not create another instance.
+- The user can assign a global hotkey; it works from any application.
+- The UI is localized: Russian for Russian Windows, English otherwise;
+  override with the `SWITCHER_LANG=en|ru` environment variable.
+- System changes are picked up automatically: a device plugged in or removed, the default changed
+  externally — menu, tooltip and cycle position refresh themselves.
 
-## Жёсткие ограничения
+## Hard constraints
 
-- Смена устройства по умолчанию — **только** через недокументированный `IPolicyConfig`
-  (`SetDefaultEndpoint` для ролей `eConsole`, `eMultimedia`, `eCommunication`).
-  Эмуляция через UI/SendInput запрещена. Фолбэк при ошибке — лог и отсутствие переключения, не паника.
-- Конфиг: `%APPDATA%\SwitcherProgramm\config.json`, запись атомарная (временный файл + rename).
-  Избранное — по стабильному endpoint ID, не по имени.
-- Хоткей: только с модификатором; занятые системой/другими приложениями — отклонять
-  (проверка реальной регистрацией `RegisterHotKey`).
-- Текущий индекс цикла — runtime-состояние, в конфиг не писать.
-- Ошибки Win32/COM: обрабатывать `HRESULT`, логировать, деградировать; паник в рабочем коде нет.
-- COM — только на главном потоке; указатели между потоками не передавать.
-- Никаких тяжёлых GUI-фреймворков; реестр — только для опционального автозапуска.
-- Пользовательские строки (меню, тосты, подсказки) — только через `src/i18n` (`i18n::lang()`);
-  хардкодить текст UI в других модулях нельзя. Новые языки добавляются там же.
-- Комментарии в коде и сообщения в логах — на английском.
-- Иконка — единый источник `assets/app-icon.png` (512×512 RGBA). `build.rs` генерирует из неё
-  `.ico` для exe (16…256) и кадр 32×32 для трея; ничего рисовать в коде не нужно. Бинарные ассеты,
-  кроме этого PNG, не добавлять. Без `rc.exe` сборка не падает — только предупреждение.
+- Switching the default device — **only** through the undocumented `IPolicyConfig`
+  (`SetDefaultEndpoint` for `eConsole`, `eMultimedia`, `eCommunication`).
+  UI emulation is forbidden. On error: log it and do not switch, never panic.
+- Config: `%APPDATA%\SwitcherProgramm\config.json`, atomic write (temporary file + rename).
+  Favourites are identified by a stable endpoint ID, not by name.
+- Hotkey: modifiers are mandatory; combinations taken by the system or other apps must be rejected
+  (verified by actually calling `RegisterHotKey`).
+- The current cycle index is runtime state — never write it to the config.
+- Win32/COM errors: handle `HRESULT`, log, degrade; no panics in production code.
+- COM — main thread only; never pass pointers between threads.
+- No heavy GUI frameworks; the registry is used only for optional autostart.
+- User-facing strings (menu, toasts, hints) — only via `src/i18n` (`i18n::lang()`);
+  never hardcode UI text in other modules. New languages are added there.
+- Code comments and log messages are in English.
+- The icon has a single source: `assets/app-icon.png` (512×512 RGBA). `build.rs` generates the
+  `.ico` for the exe (16…256) and a 32×32 frame for the tray; nothing is drawn in code.
+  Do not add binary assets other than this PNG. Without `rc.exe` the build does not fail — only a warning.
 
-## Перед коммитом
+## Before committing
 
 ```powershell
 cargo fmt
@@ -54,17 +54,17 @@ cargo test
 cargo build --release
 ```
 
-- Сборка должна проходить без предупреждений (кроме известного ложного `unused dependency env_logger`).
-- Быстрая проверка на живой системе без трея: `--list`, `--switch <N>`, `--toast-test`, `--hotkey-test`, `--lang`, `--version`.
-- Номер сборки: `build-number.txt` инкрементирует `build.rs` при release-сборке; обновлённый файл
-  коммитить вместе с релизом. `SWITCHER_BUILD_NUMBER` переопределяет номер.
-- Ручные сценарии: 1 / 2 / 5+ устройств, отключение активного устройства, сон/пробуждение,
-  звук из уже играющего приложения после переключения.
+- The build must be warning-free (except the known false `unused dependency env_logger`).
+- Quick live checks without the tray: `--list`, `--switch <N>`, `--toast-test`, `--hotkey-test`, `--lang`, `--version`.
+- Build number: `build.rs` increments `build-number.txt` on release builds; commit the updated file
+  with the release. `SWITCHER_BUILD_NUMBER` overrides the number.
+- Manual scenarios: 1 / 2 / 5+ devices, unplugging the active device, sleep/wake,
+  audio from an already playing app after switching.
 
-## Коммиты
+## Commits
 
-- Conventional commits, сообщения на английском: `feat:`, `fix:`, `docs:`, `chore:`.
+- Conventional commits, messages in English: `feat:`, `fix:`, `docs:`, `chore:`.
 
-## Среда
+## Environment
 
-- Windows 10 1809+ / 11, PowerShell. Rust — стабильный канал.
+- Windows 10 1809+ / 11, PowerShell. Rust — stable channel.

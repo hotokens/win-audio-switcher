@@ -1,4 +1,4 @@
-//! Управление иконкой в системном трее и контекстным меню.
+//! Management of the system tray icon and the context menu.
 
 use std::collections::HashMap;
 
@@ -10,13 +10,13 @@ use crate::audio::{AudioDevice, AudioManager, FormFactor};
 use crate::config::Favorites;
 use crate::i18n;
 
-/// Менеджер системного трея.
+/// System tray manager.
 pub struct TrayManager {
     tray: Option<tray_icon::TrayIcon>,
 }
 
 impl TrayManager {
-    /// Создать новый TrayManager.
+    /// Create a new TrayManager.
     pub fn new(
         audio: &AudioManager,
         favorites: &Favorites,
@@ -27,8 +27,8 @@ impl TrayManager {
 
         let tray = TrayIconBuilder::new()
             .with_icon(crate::icon::get_icon())
-            // По умолчанию ЛКМ открывает меню; нам нужен ЛКМ = переключение,
-            // меню — только по ПКМ.
+            // By default the left click opens the menu; we need left click = switch,
+            // and the menu only on right click.
             .with_menu_on_left_click(false)
             .with_menu(Box::new(menu))
             .with_tooltip(tooltip.as_str())
@@ -38,7 +38,7 @@ impl TrayManager {
         Self { tray }
     }
 
-    /// Перестроить контекстное меню и обновить трей.
+    /// Rebuild the context menu and update the tray.
     pub fn update(
         &mut self,
         audio: &AudioManager,
@@ -49,16 +49,16 @@ impl TrayManager {
         let (tooltip, menu) = Self::build_ui(audio, favorites, current_device, cycle_index);
 
         if let Some(ref tray) = self.tray {
-            // set_menu не возвращает Result — перестроенное меню заменяется целиком.
+            // set_menu returns no Result — the rebuilt menu replaces the previous one entirely.
             tray.set_menu(Some(Box::new(menu)));
             let _ = tray.set_tooltip(Some(tooltip.as_str()));
         }
     }
 
-    /// Символ-иконка по типу устройства (в духе значков в настройках Windows).
+    /// Symbol-icon for the device type (in the spirit of the Windows settings icons).
     ///
-    /// `muda` не умеет рисовать настоящие иконки в пунктах меню, поэтому тип
-    /// устройства показывается эмодзи-символом перед названием.
+    /// `muda` cannot draw real icons in menu items, so the device type is shown
+    /// as an emoji symbol before the name.
     fn device_symbol(form_factor: FormFactor) -> &'static str {
         match form_factor {
             FormFactor::Speakers => "🔊",
@@ -71,36 +71,36 @@ impl TrayManager {
         }
     }
 
-    /// Текст тултипа при наведении на иконку трея.
+    /// Tooltip text shown when hovering over the tray icon.
     ///
-    /// Лимит Shell: `szTip` в `NOTIFYICONDATAW` отображается максимум
-    /// в 64 UTF-16 символах — более длинный текст Shell молча обрезает
-    /// посреди строки. Поэтому формат компактный, а имя устройства
-    /// урезается с многоточием так, чтобы всё уложилось в лимит.
+    /// Shell limit: `szTip` in `NOTIFYICONDATAW` displays at most
+    /// 64 UTF-16 characters — a longer text is silently truncated by the Shell
+    /// mid-string. That is why the format is compact and the device name
+    /// is trimmed with an ellipsis so that everything fits the limit.
     fn build_tooltip_text(device_name: &str, position: usize, total: usize) -> String {
-        const MAX_CHARS: usize = 63; // 64-й символ занят нулевым терминатором
+        const MAX_CHARS: usize = 63; // the 64th character is taken by the null terminator
 
         let first = i18n::lang().device_position(position, total);
-        // +1 на '\n' между строками.
+        // +1 for '\n' between the lines.
         let name_budget = MAX_CHARS.saturating_sub(first.chars().count() + 1);
         if name_budget == 0 {
-            // Экзотический случай: первая строка сама длиннее лимита.
+            // Exotic case: the first line itself is longer than the limit.
             return first.chars().take(MAX_CHARS).collect();
         }
         let name_len = device_name.chars().count();
         if name_len <= name_budget {
             return format!("{}\n{}", first, device_name);
         }
-        // Обрезаем имя, оставляя символ под многоточие.
+        // Truncate the name, leaving room for the ellipsis.
         let mut name: String = device_name.chars().take(name_budget - 1).collect();
         name.push('…');
         format!("{}\n{}", first, name)
     }
 
-    /// Построить тултип и меню за один проход (одно перечисление устройств).
+    /// Build the tooltip and the menu in a single pass (one device enumeration).
     ///
-    /// Возвращает `(тултип, меню)`. В тултип идёт дружелюбное имя текущего
-    /// устройства, а не его endpoint ID (тот слишком длинный для чтения).
+    /// Returns `(tooltip, menu)`. The tooltip gets the friendly name of the current
+    /// device instead of its endpoint ID (that one is too long to read).
     fn build_ui(
         audio: &AudioManager,
         favorites: &Favorites,
@@ -109,34 +109,34 @@ impl TrayManager {
     ) -> (String, Menu) {
         let menu = Menu::new();
 
-        // Одно перечисление устройств на всё меню и на тултип.
+        // A single device enumeration for the whole menu and the tooltip.
         let all_devices = audio.list_devices();
         let by_id: HashMap<String, AudioDevice> = all_devices
             .iter()
             .map(|d| (d.id.clone(), d.clone()))
             .collect();
 
-        // Имя текущего устройства для тултипа (fallback — сам ID).
+        // Name of the current device for the tooltip (fallback — the ID itself).
         let current_name = by_id
             .get(current_device)
             .map(|d| d.name.clone())
             .unwrap_or_else(|| current_device.to_string());
 
-        // Избранные устройства в порядке конфига.
+        // Favourite devices in config order.
         let fav_devices: Vec<AudioDevice> = favorites
             .devices
             .iter()
             .filter_map(|id| by_id.get(id).cloned())
             .collect();
 
-        // Пункт "Переключить" (циклическое переключение).
+        // "Switch" item (cyclic switching).
         if !fav_devices.is_empty() {
             let cycle_label = i18n::lang().switch_item(cycle_index + 1, fav_devices.len());
             let cycle = MenuItem::with_id("cycle", cycle_label, true, None::<Accelerator>);
             let _ = menu.append(&cycle);
         } else {
             let _ = menu.append(&PredefinedMenuItem::separator());
-            // Пункт-подсказка: отключён, чтобы не «кликать в пустоту».
+            // Hint item: disabled so the user does not "click into the void".
             let note = MenuItem::with_id(
                 "empty",
                 i18n::lang().empty_hint(),
@@ -146,7 +146,7 @@ impl TrayManager {
             let _ = menu.append(&note);
         }
 
-        // Пункт «Hotkey» — клик запускает захват комбинации.
+        // "Hotkey" item — a click starts capturing the combination.
         let hotkey_label = match &favorites.hotkey {
             Some(hk) => i18n::lang().hotkey_item(&hk.display()),
             None => i18n::lang().hotkey_unset(),
@@ -154,12 +154,12 @@ impl TrayManager {
         let hotkey_item = MenuItem::with_id("hotkey", hotkey_label, true, None::<Accelerator>);
         let _ = menu.append(&hotkey_item);
 
-        // Разделитель.
+        // Separator.
         let _ = menu.append(&PredefinedMenuItem::separator());
 
-        // Подменю «Избранное»: все устройства списком, галочка = в избранном.
-        // Клик по пункту добавляет/убирает устройство (переключение — через
-        // верхний пункт, иконку трея или хоткей).
+        // "Favorites" submenu: all devices listed, a checkmark = favourite.
+        // Clicking an item adds/removes the device (switching is done via
+        // the top item, the tray icon or the hotkey).
         let favorites_submenu = Submenu::new(i18n::lang().favorites_label(), true);
 
         let existing: std::collections::HashSet<&String> = favorites.devices.iter().collect();
@@ -194,10 +194,10 @@ impl TrayManager {
 
         let _ = menu.append(&favorites_submenu);
 
-        // Разделитель.
+        // Separator.
         let _ = menu.append(&PredefinedMenuItem::separator());
 
-        // Версия приложения: неактивная строка над «Выход».
+        // Application version: a disabled line above "Exit".
         let version_item = MenuItem::with_id(
             "version",
             i18n::lang().version_label(&crate::version::full()),
@@ -206,11 +206,11 @@ impl TrayManager {
         );
         let _ = menu.append(&version_item);
 
-        // «Выход»: завершает приложение (обрабатывается в event loop по id "exit").
+        // "Exit": terminates the application (handled in the event loop by the "exit" id).
         let exit = MenuItem::with_id("exit", i18n::lang().exit_label(), true, None::<Accelerator>);
         let _ = menu.append(&exit);
 
-        // Возврат: тултип + меню.
+        // Return: tooltip + menu.
         (
             Self::build_tooltip_text(
                 &current_name,

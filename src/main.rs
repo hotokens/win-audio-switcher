@@ -1,4 +1,4 @@
-//! SwitcherProgramm — переключатель устройств вывода в системном трее.
+//! SwitcherProgramm — an audio output device switcher in the system tray.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -28,33 +28,33 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_HOTKEY, WM_QUIT,
 };
 
-/// Имя именованного мьютекса для single-instance.
-/// Префикс `Local\` обязателен: мьютекс должен жить в сессии текущего пользователя.
+/// Name of the named mutex for single-instance.
+/// The `Local\` prefix is mandatory: the mutex must live in the current user's session.
 const INSTANCE_MUTEX_NAME: PCWSTR = w!("Local\\SwitcherProgramm.Instance");
 
-/// Окно подавления серии кликов: двойной клик по иконке Windows присылает
-/// как `Double` плюс два `Left`, а переключение должно быть одно.
+/// Click burst suppression window: a double click on a Windows icon arrives
+/// as `Double` plus two `Left` events, but switching must happen only once.
 const ICON_CLICK_DEBOUNCE: Duration = Duration::from_millis(350);
 
-/// Период просыпания event loop во время захвата хоткея (идёт опрос клавиатуры).
+/// Event loop wake-up period while capturing a hotkey (the keyboard is being polled).
 const CAPTURE_POLL_MS: u32 = 15;
 
-/// Пауза перед перестройкой меню после событий устройств: Windows присылает
-/// их сериями (смена default — по событию на роль), а перечисление устройств
-/// и пересборка меню — дорогие операции.
+/// Delay before rebuilding the menu after device events: Windows delivers
+/// them in bursts (one event per role for a default change), while enumerating
+/// devices and rebuilding the menu are expensive operations.
 const REFRESH_DEBOUNCE: Duration = Duration::from_millis(150);
 
-/// Состояние захвата горячей клавиши (пользователь выбирает комбинацию).
+/// Capture state for the hotkey (the user is choosing a combination).
 struct CaptureState {
-    /// Индекс кадра анимации точек слева от поля настройки.
+    /// Animation frame index of the dots to the left of the settings field.
     dots: u8,
-    /// Когда последний раз обновляли анимацию.
+    /// When the animation was last updated.
     last_tick: Instant,
-    /// Клавиши, зажатые на прошлом опросе — чтобы ловить только новые нажатия.
+    /// Keys held during the previous poll — so only new presses are detected.
     prev_down: HashSet<u32>,
 }
 
-/// Структура состояния приложения.
+/// Application state structure.
 struct AppState {
     audio: audio::AudioManager,
     favorites: config::Favorites,
@@ -62,31 +62,31 @@ struct AppState {
     cycle_index: usize,
     tray: tray::TrayManager,
     toast: toast::Toast,
-    /// Прямоугольник иконки трея (left, top, right, bottom), полученный
-    /// из последнего клика; нужен, чтобы поставить тост ровно у иконки.
+    /// Tray icon rectangle (left, top, right, bottom) obtained from the last
+    /// click; used to place the toast exactly at the icon.
     last_icon_rect: Option<(i32, i32, i32, i32)>,
-    /// Активный захват хоткея (None — обычный режим).
+    /// Active hotkey capture (None — normal mode).
     capture: Option<CaptureState>,
-    /// Момент последнего переключения кликом по иконке — чтобы двойной клик
-    /// (Windows присылает ещё и `Double`, а следом второй `Left`) не
-    /// переключал устройство дважды.
+    /// Time of the last switch by icon click — so a double click
+    /// (Windows also sends `Double`, followed by a second `Left`) does not
+    /// switch the device twice.
     last_icon_cycle: Option<Instant>,
-    /// Когда пора перечитать устройства (склеивает серию уведомлений).
+    /// When devices should be re-read (coalesces a burst of notifications).
     refresh_due: Option<Instant>,
 }
 
 impl AppState {
     fn new() -> Self {
-        // Загрузка конфига.
+        // Load the config.
         let favorites = config::load_favorites();
 
-        // Создание менеджера аудио.
+        // Create the audio manager.
         let audio = audio::AudioManager::new();
 
-        // Получение текущего устройства по умолчанию.
+        // Get the current default device.
         let current_device = audio.get_default_endpoint().unwrap_or_default();
 
-        // Начальная позиция цикла — позиция текущего default среди активных избранных.
+        // Initial cycle position — the position of the current default among active favourites.
         let current_default = audio.get_default_endpoint().ok();
         let cycle_index = audio
             .get_favorites(&favorites)
@@ -95,10 +95,10 @@ impl AppState {
             .position(|d| Some(&d.id) == current_default.as_ref())
             .unwrap_or(0);
 
-        // Создание менеджера трея.
+        // Create the tray manager.
         let tray = tray::TrayManager::new(&audio, &favorites, &current_device, cycle_index);
 
-        // Регистрация сохранённого хоткея (если он был задан).
+        // Register the saved hotkey (if one was set).
         if let Some(hk) = &favorites.hotkey {
             match hk.register() {
                 Ok(()) => log::info!("Hotkey registered: {}", hk.display()),
@@ -120,12 +120,12 @@ impl AppState {
         }
     }
 
-    /// Запланировать перечитывание устройств (серия событий схлопнется в одно).
+    /// Schedule a device re-read (a burst of events collapses into one).
     fn schedule_refresh(&mut self) {
         self.refresh_due = Some(Instant::now() + REFRESH_DEBOUNCE);
     }
 
-    /// Выполнить отложенное обновление, если пауза после событий уже прошла.
+    /// Perform the deferred refresh if the pause after events has already elapsed.
     fn flush_due_refresh(&mut self) {
         if let Some(due) = self.refresh_due {
             if Instant::now() >= due {
@@ -135,8 +135,8 @@ impl AppState {
         }
     }
 
-    /// Сколько ждать следующего события (мс): учитывает захват хоткея
-    /// и отложенное обновление устройств.
+    /// How long to wait for the next event (ms): accounts for hotkey capture
+    /// and the deferred device refresh.
     fn wait_timeout_ms(&self) -> u32 {
         if self.capture.is_some() {
             return CAPTURE_POLL_MS;
@@ -154,9 +154,9 @@ impl AppState {
         }
     }
 
-    /// Перечитать состояние системы: текущее устройство, позицию в цикле,
-    /// меню и тултип. Вызывается, когда устройства добавились/удалились или
-    /// default сменили извне.
+    /// Re-read the system state: current device, cycle position,
+    /// menu and tooltip. Called when devices are added/removed or the
+    /// default was changed externally.
     fn refresh_from_system(&mut self) {
         if let Ok(default) = self.audio.get_default_endpoint() {
             self.current_device = default;
@@ -171,7 +171,7 @@ impl AppState {
         log::debug!("State refreshed after device notification");
     }
 
-    /// Якорь для тоста: прямоугольник иконки трея, иначе точка у курсора.
+    /// Anchor for the toast: the tray icon rectangle, otherwise the cursor position.
     fn toast_anchor(&self) -> (i32, i32, i32, i32) {
         self.last_icon_rect.unwrap_or_else(|| {
             let mut p = POINT::default();
@@ -182,11 +182,11 @@ impl AppState {
         })
     }
 
-    /// Синхронизировать cycle_index с реальным default-устройством.
+    /// Synchronize cycle_index with the real default device.
     ///
-    /// Индекс = позиция текущего default среди АКТИВНЫХ избранных;
-    /// если текущее не в избранном (или не активно) — 0.
-    /// Возвращает `(индекс, всего активных)` — для подписей «N из M».
+    /// Index = position of the current default among ACTIVE favourites;
+    /// if the current one is not a favourite (or not active) — 0.
+    /// Returns `(index, total active)` — for the “N of M” labels.
     fn sync_cycle_index(&mut self) -> (usize, usize) {
         let current = self.audio.get_default_endpoint().ok();
         let active: Vec<String> = self
@@ -205,8 +205,8 @@ impl AppState {
         (pos, total)
     }
 
-    /// Показать всплывающую подсказку о новом активном устройстве
-    /// (у иконки трея, как при наведении; исчезает через 1 с).
+    /// Show a balloon tip about the new active device
+    /// (at the tray icon, as on hover; disappears after 1 s).
     fn show_switch_toast(&mut self, device_name: &str, position: usize, total: usize) {
         let text = format!(
             "{}\n{}",
@@ -217,16 +217,16 @@ impl AppState {
         self.toast.show_anchored(&text, anchor);
     }
 
-    /// Короткое сообщение в тосте (без смены устройства).
+    /// Short message in the toast (without switching the device).
     fn flash_toast(&mut self, text: &str) {
         let anchor = self.toast_anchor();
         self.toast.show_anchored(text, anchor);
     }
 
-    /// Начать захват новой комбинации.
+    /// Start capturing a new combination.
     ///
-    /// Текущая комбинация снимается с регистрации, чтобы нажатие прежней
-    /// не переключало устройство во время настройки.
+    /// The current combination is unregistered so that pressing the previous
+    /// one does not switch the device during configuration.
     fn start_capture(&mut self) {
         hotkey::Hotkey::unregister_all();
         self.capture = Some(CaptureState {
@@ -238,7 +238,7 @@ impl AppState {
         log::info!("Hotkey capture started");
     }
 
-    /// Тост захвата с анимированными точками слева от поля настройки.
+    /// Capture toast with animated dots to the left of the settings field.
     fn show_capture_toast(&mut self) {
         let dots = match self.capture.as_ref().map(|c| c.dots % 3) {
             Some(1) => "·  ●  ·",
@@ -256,7 +256,7 @@ impl AppState {
         self.toast.show_anchored(&text, anchor);
     }
 
-    /// Прервать захват (Esc): вернуть прежнюю комбинацию, если она была.
+    /// Abort the capture (Esc): restore the previous combination if there was one.
     fn cancel_capture(&mut self) {
         let lang = i18n::lang();
         self.capture = None;
@@ -270,7 +270,7 @@ impl AppState {
         }
     }
 
-    /// Принять новую комбинацию: регистрация, сохранение, обновление меню.
+    /// Accept the new combination: register, save, update the menu.
     fn finish_capture(&mut self, hk: hotkey::Hotkey) {
         self.capture = None;
         self.favorites.hotkey = Some(hk);
@@ -287,9 +287,9 @@ impl AppState {
         );
     }
 
-    /// Шаг захвата: анимация точек + реакция на новую комбинацию.
+    /// Capture step: dot animation + reaction to a new combination.
     ///
-    /// Вызывается из event loop, пока `capture.is_some()`.
+    /// Called from the event loop while `capture.is_some()`.
     fn tick_capture(&mut self) {
         if self.capture.is_none() {
             return;
@@ -314,7 +314,7 @@ impl AppState {
         };
 
         if let Some(vk) = newly {
-            // Esc — отмена настройки.
+            // Esc — cancel configuration.
             if vk == 0x1B {
                 self.cancel_capture();
                 return;
@@ -323,8 +323,8 @@ impl AppState {
             let modifiers = hotkey::modifiers_down();
             let lang = i18n::lang();
             if modifiers == 0 {
-                // Без модификатора комбинация перехватила бы обычное нажатие
-                // клавиши во всех приложениях — не разрешаем.
+                // Without a modifier the combination would intercept a plain key
+                // press in all applications — not allowed.
                 self.flash_toast(lang.need_modifier());
             } else {
                 let hk = hotkey::Hotkey { modifiers, vk };
@@ -334,8 +334,8 @@ impl AppState {
                         return;
                     }
                     Err(hotkey::HotkeyError::Conflict) => {
-                        // Занята системой или другим приложением — сообщаем
-                        // и продолжаем ждать другую комбинацию.
+                        // Taken by the system or another application — report it
+                        // and keep waiting for another combination.
                         self.flash_toast(lang.hotkey_conflict());
                     }
                     Err(e) => {
@@ -350,9 +350,9 @@ impl AppState {
         }
     }
 
-    /// Переключить на следующее устройство в цикле.
+    /// Switch to the next device in the cycle.
     fn cycle_next(&mut self) {
-        // Пропускаем отключённые устройства: цикл идёт только по активным.
+        // Skip disabled devices: the cycle only walks active ones.
         let active_devices: Vec<_> = self
             .audio
             .get_favorites(&self.favorites)
@@ -360,14 +360,14 @@ impl AppState {
             .filter(|d| d.state == audio::DeviceState::Active)
             .collect();
 
-        // 0 устройств — делать нечего; 1 устройство — переключать некуда.
+        // 0 devices — nothing to do; 1 device — nowhere to switch.
         if active_devices.len() < 2 {
             return;
         }
 
-        // Следующий — после текущего default (позиция берётся из системы,
-        // а не из хранимого индекса: пользователь мог сменить устройство
-        // вручную через системную панель).
+        // Next one — after the current default (the position is taken from the
+        // system, not from the stored index: the user may have changed the device
+        // manually via the system panel).
         let current = self.audio.get_default_endpoint().ok();
         let current_pos = current
             .as_ref()
@@ -398,7 +398,7 @@ impl AppState {
         self.show_switch_toast(&device_name, position, total);
     }
 
-    /// Добавить или убрать устройство из избранного (клик по пункту-галочке).
+    /// Add or remove a device from favourites (click on a checkbox item).
     fn toggle_favorite(&mut self, endpoint_id: &str) {
         if let Some(index) = self
             .favorites
@@ -411,12 +411,12 @@ impl AppState {
             self.favorites.devices.push(endpoint_id.to_string());
         }
 
-        // Сохраняем конфиг при каждом изменении избранного (требование AGENTS.md).
+        // Save the config on every favourites change (AGENTS.md requirement).
         if let Err(e) = config::save_favorites(&self.favorites) {
             log::error!("Failed to save favorites: {}", e);
         }
 
-        // Убрали текущее устройство из цикла — позиция могла измениться.
+        // The current device was removed from the cycle — the position may have changed.
         self.sync_cycle_index();
         self.tray.update(
             &self.audio,
@@ -428,30 +428,30 @@ impl AppState {
 }
 
 fn main() {
-    // Инициализация логирования (debug-сборка — консольная, логи видны).
+    // Logging initialization (debug build — console, logs are visible).
     #[cfg(debug_assertions)]
     env_logger::init();
 
-    // CLI-режим диагностики (--list / --switch <N>): до мьютекса и трея.
+    // CLI diagnostics mode (--list / --switch <N>): before the mutex and the tray.
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         std::process::exit(cli_mode(&args));
     }
 
-    // COM-инициализация (STA): обязана быть до любых COM-вызовов.
+    // COM initialization (STA): must happen before any COM calls.
     let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     if hr.is_err() {
         log::error!("Failed to initialize COM: 0x{:08x}", hr.0);
         return;
     }
-    // RAII-гард: CoUninitialize вызовется при выходе из main (после drop AppState).
+    // RAII guard: CoUninitialize is called when main exits (after AppState is dropped).
     let _com_guard = ComUninitializer;
 
-    // Single-instance: именованный мьютекс.
+    // Single-instance: named mutex.
     unsafe {
-        // HANDLE в windows-rs не имеет Drop и не закрывается при дропе:
-        // хендл остаётся открытым до завершения процесса, поэтому
-        // именованный мьютекс-объект живёт всё время работы приложения.
+        // A HANDLE in windows-rs has no Drop and is not closed on drop:
+        // the handle stays open until the process exits, so the
+        // named mutex object lives for the whole application lifetime.
         let _mutex_handle = match CreateMutexW(None, true, INSTANCE_MUTEX_NAME) {
             Ok(h) => h,
             Err(e) => {
@@ -460,31 +460,31 @@ fn main() {
             }
         };
 
-        // GetLastError() обязан вызываться сразу после CreateMutexW.
+        // GetLastError() must be called immediately after CreateMutexW.
         if GetLastError() == ERROR_ALREADY_EXISTS {
             log::info!("Another instance is already running.");
             return;
         }
     }
 
-    // Создание состояния приложения.
+    // Create the application state.
     let mut state = AppState::new();
 
-    // Запуск event loop.
+    // Start the event loop.
     run_event_loop(&mut state);
 }
 
-/// Основная event loop: message loop + обработка событий трея и меню.
+/// Main event loop: message loop + handling of tray and menu events.
 ///
-/// tray-icon и muda доставляют события через глобальные каналы
-/// (`TrayIconEvent::receiver()` / `MenuEvent::receiver()`), которые
-/// наполняются из оконных процедур их скрытых окон — поэтому каналы
-/// надо опустошать после каждого прогона message loop.
+/// tray-icon and muda deliver events through global channels
+/// (`TrayIconEvent::receiver()` / `MenuEvent::receiver()`), which are
+/// filled from the window procedures of their hidden windows — therefore the
+/// channels must be drained after every pass of the message loop.
 fn run_event_loop(state: &mut AppState) {
     loop {
-        // 1. Прокачиваем все накопленные сообщения.
-        //    WM_HOTKEY приходит в очередь потока (RegisterHotKey с hwnd = NULL) —
-        //    это и есть срабатывание глобальной комбинации из любого приложения.
+        // 1. Pump all accumulated messages.
+        //    WM_HOTKEY arrives in the thread queue (RegisterHotKey with hwnd = NULL) —
+        //    this is the firing of the global combination from any application.
         let mut msg = MSG::default();
         unsafe {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
@@ -496,7 +496,7 @@ fn run_event_loop(state: &mut AppState) {
                     continue;
                 }
                 if msg.message == audio::WM_DEVICES_CHANGED {
-                    // Колбэк уже выставил флаг; сообщение лишь разбудило нас.
+                    // The callback has already set the flag; the message merely woke us up.
                     audio::take_refresh_request();
                     state.schedule_refresh();
                     continue;
@@ -506,8 +506,8 @@ fn run_event_loop(state: &mut AppState) {
             }
         }
 
-        // 2. Клики по самой иконке. Любой клик несёт координаты иконки —
-        // кэшируем прямоугольник для тоста при переключении через меню.
+        // 2. Clicks on the icon itself. Any click carries the icon coordinates —
+        // cache the rectangle for the toast when switching via the menu.
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
             let rect = event.icon_rect;
             state.last_icon_rect = Some((
@@ -517,8 +517,8 @@ fn run_event_loop(state: &mut AppState) {
                 rect.bottom as i32,
             ));
 
-            // Двойной клик Windows присылает как `Double` + два `Left`,
-            // поэтому обрабатываем только `Left` и гасим серию по времени.
+            // Windows sends a double click as `Double` + two `Left` events,
+            // so only `Left` is handled and the burst is suppressed by time.
             if matches!(event.click_type, ClickType::Left) {
                 let now = Instant::now();
                 let too_soon = state
@@ -531,26 +531,26 @@ fn run_event_loop(state: &mut AppState) {
             }
         }
 
-        // 3. Пункты меню. «Выход» — прерываем цикл.
+        // 3. Menu items. "Exit" — break the loop.
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if dispatch_menu_event(state, &event.id.0) {
                 return;
             }
         }
 
-        // 4. Устройства добавились/удалились или default сменили извне.
+        // 4. Devices added/removed or the default changed externally.
         if audio::take_refresh_request() {
             state.schedule_refresh();
         }
         state.flush_due_refresh();
 
-        // 5. Захват хоткея (если идёт): анимация точек и чтение клавиш.
+        // 5. Hotkey capture (if in progress): dot animation and key reading.
         state.tick_capture();
 
-        // Ждём следующего сообщения вместо `sleep`: Windows будит поток,
-        // как только появляется ввод (клик, WM_HOTKEY, COM-уведомление).
-        // Таймаут нужен для опроса клавиатуры при захвате и для отложенного
-        // обновления устройств; в остальное время спим бесконечно.
+        // Wait for the next message instead of `sleep`: Windows wakes the thread
+        // as soon as input appears (a click, WM_HOTKEY, a COM notification).
+        // The timeout is needed for keyboard polling during capture and for the deferred
+        // device refresh; the rest of the time we sleep indefinitely.
         let timeout = state.wait_timeout_ms();
         unsafe {
             MsgWaitForMultipleObjectsEx(None, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
@@ -558,38 +558,38 @@ fn run_event_loop(state: &mut AppState) {
     }
 }
 
-/// Обработать событие меню по ID пункта.
+/// Handle a menu event by item ID.
 ///
-/// Возвращает `true`, если запрошен выход из приложения.
+/// Returns `true` if application exit was requested.
 ///
-/// Схема ID (см. `tray::build_ui`):
-/// - `"cycle"` — циклическое переключение;
-/// - `"hotkey"` — начать захват глобальной горячей клавиши;
-/// - `"version"` — неактивная строка с версией;
-/// - `"exit"` — выход;
-/// - `"toggle_<endpoint_id>"` — добавить/убрать устройство из избранного.
+/// ID scheme (see `tray::build_ui`):
+/// - `"cycle"` — cyclic switching;
+/// - `"hotkey"` — start capturing a global hotkey;
+/// - `"version"` — disabled line with the version;
+/// - `"exit"` — exit;
+/// - `"toggle_<endpoint_id>"` — add/remove a device from favourites.
 fn dispatch_menu_event(state: &mut AppState, id: &str) -> bool {
     match id {
         "cycle" => state.cycle_next(),
         "hotkey" => state.start_capture(),
-        "version" => {} // неактивная строка, событий не приходит
+        "version" => {} // disabled line, no events are delivered
         "exit" => return true,
-        "empty" => {} // пункт-подсказка, отключён — событий не должно приходить
+        "empty" => {} // hint item, disabled — no events should be delivered
         _ if id.starts_with("toggle_") => state.toggle_favorite(&id["toggle_".len()..]),
         _ => log::warn!("Unknown menu item id: {}", id),
     }
     false
 }
 
-/// CLI-режим диагностики: проверить перечисление и смену default-устройства
-/// напрямую, без трея и event loop.
+/// CLI diagnostics mode: verify device enumeration and default device switching
+/// directly, without the tray or the event loop.
 ///
 /// ```text
-/// SwitcherProgramm.exe --list          # список устройств, маркер текущего
-/// SwitcherProgramm.exe --switch <N>    # сделать устройство N устройством по умолчанию
+/// SwitcherProgramm.exe --list          # list devices, markers the current one
+/// SwitcherProgramm.exe --switch <N>    # make device N the default device
 /// ```
 ///
-/// Отдельная COM-инициализация: режим вызывается ДО основной инициализации main.
+/// Separate COM initialization: this mode is invoked BEFORE main's initialization.
 fn cli_mode(args: &[String]) -> i32 {
     unsafe {
         let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -643,18 +643,19 @@ fn cli_mode(args: &[String]) -> i32 {
             }
         }
         Some("--toast-test") => {
-            // Диагностика тоста: показываем у нижней кромки экрана (как иконка
-            // в трее — главный реальный сценарий), проверяем, что окно видимо
-            // и целиком внутри экрана, затем что таймер его спрятал.
+            // Toast diagnostics: show it at the bottom edge of the screen (like the tray
+            // icon — the main real-world scenario), check that the window is visible
+            // and fully on screen, then that the timer hid it.
             use std::time::{Duration, Instant};
 
             let mut toast = toast::Toast::new();
             let (sw, sh) =
                 unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
 
-            // Имитация иконки в трее: маленький квадрат у нижней кромки.
+            // Simulate a tray icon: a small square at the bottom edge.
             let anchor = (sw - 60, sh - 48, sw - 20, sh - 8);
-            toast.show_anchored("Тест тоста\nУстройство: 1 из 2", anchor);
+            let text = format!("Test notification\n{}", i18n::lang().device_position(1, 2));
+            toast.show_anchored(&text, anchor);
             let visible_after_show = toast.debug_is_visible();
             let rect = toast.debug_rect();
             println!("screen:  0,0 {}x{}", sw, sh);
@@ -674,7 +675,7 @@ fn cli_mode(args: &[String]) -> i32 {
                 }
             }
 
-            // Качаем сообщения 1.5 с: WM_TIMER должен деактивировать тултип.
+            // Pump messages for 1.5 s: WM_TIMER must deactivate the tooltip.
             let start = Instant::now();
             unsafe {
                 let mut msg = MSG::default();
@@ -699,10 +700,10 @@ fn cli_mode(args: &[String]) -> i32 {
             }
         }
         Some("--hotkey-test") => {
-            // Проверка механики хоткея без ручного участия:
-            //  1) системные комбинации должны отклоняться (Conflict);
-            //  2) Ctrl+Shift+U должен регистрироваться и доставлять WM_HOTKEY
-            //     (нажатие синтезируется SendInput).
+            // Verify the hotkey mechanics without manual involvement:
+            //  1) system combinations must be rejected (Conflict);
+            //  2) Ctrl+Shift+U must register and deliver WM_HOTKEY
+            //     (the press is synthesized with SendInput).
             use windows::Win32::UI::Input::KeyboardAndMouse::{
                 SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
                 KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL, VK_SHIFT,
@@ -711,7 +712,7 @@ fn cli_mode(args: &[String]) -> i32 {
 
             let mut failed = false;
 
-            // 1. Заведомо системные комбинации.
+            // 1. Known system combinations.
             for (name, modifiers, vk) in [
                 ("Win + L", 0x0008u32, 0x4Cu32),
                 ("Alt + Tab", 0x0001, 0x09),
@@ -728,7 +729,7 @@ fn cli_mode(args: &[String]) -> i32 {
                 }
             }
 
-            // 2. Своя комбинация: Ctrl + Shift + U.
+            // 2. Our own combination: Ctrl + Shift + U.
             let hk = hotkey::Hotkey {
                 modifiers: 0x0002 | 0x0004,
                 vk: 0x55,
@@ -741,7 +742,7 @@ fn cli_mode(args: &[String]) -> i32 {
                 }
             }
 
-            // Синтез нажатия: Ctrl↓ Shift↓ U↓ U↑ Shift↑ Ctrl↑.
+            // Synthesize the press: Ctrl↓ Shift↓ U↓ U↑ Shift↑ Ctrl↑.
             let key = |vk: u16, up: bool| INPUT {
                 r#type: INPUT_KEYBOARD,
                 Anonymous: INPUT_0 {
@@ -770,7 +771,7 @@ fn cli_mode(args: &[String]) -> i32 {
                 SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
             }
 
-            // Ждём WM_HOTKEY.
+            // Wait for WM_HOTKEY.
             let mut hits = 0u32;
             let start = Instant::now();
             unsafe {
@@ -800,7 +801,7 @@ fn cli_mode(args: &[String]) -> i32 {
             }
         }
         Some("--lang") => {
-            // Диагностика локализации: какой язык выбран и как выглядят строки.
+            // Localization diagnostics: which language is selected and how the strings look.
             let lang = i18n::lang();
             println!("lang: {:?}", lang);
             println!("menu cycle:      {}", lang.switch_item(1, 3));
@@ -823,7 +824,7 @@ fn cli_mode(args: &[String]) -> i32 {
     }
 }
 
-/// RAII-гард для CoUninitialize.
+/// RAII guard for CoUninitialize.
 struct ComUninitializer;
 
 impl Drop for ComUninitializer {

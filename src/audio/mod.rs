@@ -1,7 +1,7 @@
-//! Перечисление и мониторинг аудиоустройств вывода (Core Audio / MMDevice API).
+//! Enumeration and monitoring of audio output devices (Core Audio / MMDevice API).
 //!
-//! Использует `IMMDeviceEnumerator` для получения списка устройств и
-//! `IMMNotificationClient` для подписки на события добавления/удаления/смены состояния.
+//! Uses `IMMDeviceEnumerator` to get the device list and
+//! `IMMNotificationClient` to subscribe to add/remove/state-change events.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -22,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_APP};
 
 use crate::config::Favorites;
 
-/// Состояние устройства.
+/// Device state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceState {
     Active,
@@ -30,15 +30,15 @@ pub enum DeviceState {
     Inactive,
 }
 
-/// Форм-фактор устройства вывода — так Windows классифицирует эндпоинты
-/// (используется для иконки в меню, как в настройках звука).
+/// Output device form factor — this is how Windows classifies endpoints
+/// (used for the icon in the menu, as in the sound settings).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormFactor {
     Speakers,
     Headphones,
     /// HDMI / DisplayPort (DigitalAudioDisplayDevice).
     DisplayPort,
-    /// S/PDIF и цифровой passthrough.
+    /// S/PDIF and digital passthrough.
     Digital,
     LineLevel,
     Remote,
@@ -59,47 +59,47 @@ impl FormFactor {
     }
 }
 
-/// Информация об одном устройстве.
+/// Information about a single device.
 #[derive(Debug, Clone)]
 pub struct AudioDevice {
-    /// Стабильный endpoint ID (используется как идентификатор).
+    /// Stable endpoint ID (used as the identifier).
     pub id: String,
-    /// Дружелюбное имя для отображения.
+    /// Friendly name for display.
     pub name: String,
-    /// Текущее состояние.
+    /// Current state.
     pub state: DeviceState,
-    /// Тип устройства (для иконки в меню).
+    /// Device type (for the icon in the menu).
     pub form_factor: FormFactor,
 }
 
-/// Менеджер аудиоустройств.
+/// Audio device manager.
 ///
-/// Инкапсулирует `IMMDeviceEnumerator` и `IMMNotificationClient`.
+/// Encapsulates `IMMDeviceEnumerator` and `IMMNotificationClient`.
 pub struct AudioManager {
     enumerator: IMMDeviceEnumerator,
-    /// COM-объект callback'а. Держим, чтобы ссылка, отданная в MMDevice API,
-    /// оставалась валидной; отпускаем в Drop после Unregister.
+    /// COM callback object. Kept so that the reference handed to the MMDevice API
+    /// stays valid; released in Drop after Unregister.
     notification_client: Option<IMMNotificationClient>,
 }
 
 impl AudioManager {
-    /// Создать новый AudioManager.
+    /// Create a new AudioManager.
     ///
-    /// Допустимые `expect` — инициализация до входа в event loop (см. AGENTS.md).
+    /// The `expect`s are acceptable — initialization happens before entering the event loop (see AGENTS.md).
     pub fn new() -> Self {
-        // Запоминаем поток event loop — колбэки будут будить его сообщением.
+        // Remember the event loop thread — callbacks will wake it with a message.
         UI_THREAD_ID.store(unsafe { GetCurrentThreadId() }, Ordering::Release);
 
         unsafe {
-            // Создаём IMMDeviceEnumerator через CoCreateInstance.
-            // IID берётся из типа T (= IID_IMMDeviceEnumerator).
+            // Create IMMDeviceEnumerator via CoCreateInstance.
+            // The IID is taken from type T (= IID_IMMDeviceEnumerator).
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                     .expect("Failed to create IMMDeviceEnumerator");
 
-            // Создаём COM-объект IMMNotificationClient и регистрируем callback.
-            // События выставляют флаг, который забирает event loop и
-            // перестраивает меню (см. `take_refresh_request`).
+            // Create the IMMNotificationClient COM object and register the callback.
+            // Events set a flag that the event loop picks up and
+            // rebuilds the menu with (see `take_refresh_request`).
             let client: IMMNotificationClient = NotificationClient.into();
             if let Err(e) = enumerator.RegisterEndpointNotificationCallback(&client) {
                 log::error!("Failed to register endpoint notification callback: {}", e);
@@ -114,7 +114,7 @@ impl AudioManager {
         }
     }
 
-    /// Получить список всех устройств вывода (active + unplugged).
+    /// Get the list of all output devices (active + unplugged).
     pub fn list_devices(&self) -> Vec<AudioDevice> {
         unsafe {
             let state_mask = DEVICE_STATE(DEVICE_STATE_ACTIVE.0 | DEVICE_STATE_UNPLUGGED.0);
@@ -145,19 +145,19 @@ impl AudioManager {
                     }
                 };
 
-                // Получаем endpoint ID (стабильный идентификатор).
+                // Get the endpoint ID (stable identifier).
                 let id = match get_endpoint_id(&device) {
                     Some(id) => id,
                     None => continue,
                 };
 
-                // Получаем FriendlyName; если пусто — показываем endpoint ID.
+                // Get the FriendlyName; if empty — show the endpoint ID.
                 let name = get_friendly_name(&device).unwrap_or_else(|| id.clone());
 
-                // Определяем состояние.
+                // Determine the state.
                 let state = get_state(&device);
 
-                // Форм-фактор — для иконки в меню.
+                // Form factor — for the icon in the menu.
                 let form_factor = get_form_factor(&device);
 
                 devices.push(AudioDevice {
@@ -172,7 +172,7 @@ impl AudioManager {
         }
     }
 
-    /// Получить текущее устройство по умолчанию (endpoint ID).
+    /// Get the current default device (endpoint ID).
     pub fn get_default_endpoint(&self) -> Result<String, windows::core::Error> {
         unsafe {
             let device = self
@@ -191,7 +191,7 @@ impl AudioManager {
         }
     }
 
-    /// Получить список избранных устройств с их состоянием (в порядке конфига).
+    /// Get the list of favorite devices with their state (in config order).
     pub fn get_favorites(&self, favorites: &Favorites) -> Vec<AudioDevice> {
         let all_devices = self.list_devices();
         let device_map: HashMap<String, AudioDevice> =
@@ -207,8 +207,8 @@ impl AudioManager {
 
 impl Drop for AudioManager {
     fn drop(&mut self) {
-        // Отписываемся от уведомлений ДО отпускания COM-объекта callback'а:
-        // иначе MMDevice может вызвать уже уничтоженный объект.
+        // Unsubscribe from notifications BEFORE releasing the COM callback object:
+        // otherwise MMDevice may invoke an already destroyed object.
         if let Some(client) = self.notification_client.take() {
             unsafe {
                 if let Err(e) = self
@@ -218,14 +218,14 @@ impl Drop for AudioManager {
                     log::error!("Failed to unregister endpoint notification callback: {}", e);
                 }
             }
-            // `client` дропается здесь — COM-рефкаунт освобождается.
+            // `client` is dropped here — the COM refcount is released.
         }
     }
 }
 
-/// Получить endpoint ID устройства.
+/// Get the device endpoint ID.
 ///
-/// Строка выделена COM-аллокатором и обязана быть освобождена через CoTaskMemFree.
+/// The string is allocated by the COM allocator and must be freed via CoTaskMemFree.
 fn get_endpoint_id(device: &IMMDevice) -> Option<String> {
     unsafe {
         let id = match device.GetId() {
@@ -236,15 +236,15 @@ fn get_endpoint_id(device: &IMMDevice) -> Option<String> {
             }
         };
         let result = id.to_string().ok();
-        // Освобождаем строку, выделенную CoTaskMemAlloc внутри MMDevice API.
+        // Free the string allocated by CoTaskMemAlloc inside the MMDevice API.
         CoTaskMemFree(Some(id.as_ptr() as *const core::ffi::c_void));
         result
     }
 }
 
-/// Получить FriendlyName устройства из IPropertyStore.
+/// Get the device FriendlyName from IPropertyStore.
 ///
-/// `PROPVARIANT` освобождается автоматически (Drop вызывает PropVariantClear).
+/// `PROPVARIANT` is freed automatically (Drop calls PropVariantClear).
 fn get_friendly_name(device: &IMMDevice) -> Option<String> {
     unsafe {
         let store: IPropertyStore = device.OpenPropertyStore(STGM_READ).ok()?;
@@ -261,7 +261,7 @@ fn get_friendly_name(device: &IMMDevice) -> Option<String> {
     }
 }
 
-/// Получить состояние устройства.
+/// Get the device state.
 fn get_state(device: &IMMDevice) -> DeviceState {
     match unsafe { device.GetState() } {
         Ok(state) if state.0 == DEVICE_STATE_ACTIVE.0 => DeviceState::Active,
@@ -270,7 +270,7 @@ fn get_state(device: &IMMDevice) -> DeviceState {
     }
 }
 
-/// Получить форм-фактор устройства (`PKEY_AudioEndpoint_FormFactor`, VT_UI4).
+/// Get the device form factor (`PKEY_AudioEndpoint_FormFactor`, VT_UI4).
 fn get_form_factor(device: &IMMDevice) -> FormFactor {
     unsafe {
         let Some(store) = device.OpenPropertyStore(STGM_READ).ok() else {
@@ -287,22 +287,22 @@ fn get_form_factor(device: &IMMDevice) -> FormFactor {
     }
 }
 
-/// Флаг «состояние устройств изменилось».
+/// Flag "device state has changed".
 ///
-/// Колбэки `IMMNotificationClient` выставляют его, а event loop забирает
-/// (`take_refresh_request`) и перестраивает меню.
+/// `IMMNotificationClient` callbacks set it, and the event loop picks it up
+/// (`take_refresh_request`) and rebuilds the menu.
 static DEVICES_DIRTY: AtomicBool = AtomicBool::new(false);
 
-/// ID потока, в котором крутится event loop (0 — ещё не известен).
+/// ID of the thread running the event loop (0 — not known yet).
 static UI_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
-/// Сообщение потоку: список устройств изменился.
+/// Message to the thread: the device list has changed.
 pub const WM_DEVICES_CHANGED: u32 = WM_APP + 1;
 
-/// Запросить обновление списка устройств (из колбэка).
+/// Request a device list refresh (from a callback).
 ///
-/// Колбэки могут прийти не на потоке event loop, поэтому мало выставить флаг —
-/// нужно ещё разбудить его сообщением, иначе он спит в `MsgWaitForMultipleObjects`.
+/// Callbacks may arrive not on the event loop thread, so setting the flag alone is not enough —
+/// the loop also needs to be woken with a message, otherwise it sleeps in `MsgWaitForMultipleObjects`.
 fn request_refresh() {
     DEVICES_DIRTY.store(true, Ordering::Release);
     let thread_id = UI_THREAD_ID.load(Ordering::Acquire);
@@ -313,18 +313,18 @@ fn request_refresh() {
     }
 }
 
-/// Забрать запрос на обновление: `true` — устройства изменились.
+/// Take the refresh request: `true` — devices have changed.
 pub fn take_refresh_request() -> bool {
     DEVICES_DIRTY.swap(false, Ordering::Acquire)
 }
 
-/// `IMMNotificationClient` проекта: любое событие означает, что кэш меню
-/// и состояние цикла могли устареть.
+/// The project's `IMMNotificationClient`: any event means the menu cache
+/// and cycle state may be stale.
 ///
-/// ВАЖНО (windows 0.58): `*_Impl`-трейт реализуется для СГЕНЕРИРОВАННОЙ
-/// обёртки `NotificationClient_Impl`, а не для исходной структуры —
-/// именно её адрес попадает в vtable. Доступ к данным исходной
-/// структуры — через трейт `windows::core::IUnknownImpl` (`get_impl`).
+/// IMPORTANT (windows 0.58): the `*_Impl` trait is implemented for the GENERATED
+/// wrapper `NotificationClient_Impl`, not for the original struct —
+/// it is its address that ends up in the vtable. Access to the original
+/// struct's data is through the `windows::core::IUnknownImpl` trait (`get_impl`).
 #[implement(IMMNotificationClient)]
 struct NotificationClient;
 

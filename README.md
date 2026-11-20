@@ -3,6 +3,16 @@
 A tiny Windows tray app that switches the default audio output device — one click, one global
 hotkey, no window, no installers. Written in Rust on top of the Core Audio API.
 
+## Screenshots
+
+| Tray icon | Hover tooltip | Favorites (checkboxes + device types) |
+|:--:|:--:|:--:|
+| ![Tray icon](docs/images/tray.png) | ![Tooltip](docs/images/tooltip.png) | ![Favorites](docs/images/favorites.png) |
+
+Context menu:
+
+![Context menu](docs/images/menu.png)
+
 <!-- Optional: add a screenshot or GIF of the tray menu here -->
 
 ## Features

@@ -70,17 +70,17 @@ Corrupt/empty JSON or missing fields fall back to defaults instead of panicking.
 ### `tray` — icon and menu
 
 `TrayManager::build_ui` builds both the tooltip and the menu from a single device enumeration:
-“Переключить (N из M)”, “Hot-key переключатель: …”, a “Избранное” submenu and “Выход”. The menu is
+“Switch (N of M)”, “Hotkey: …”, a “Favorites” submenu and “Exit”. The menu is
 rebuilt from scratch whenever state changes.
 
-The “Избранное” submenu is the favourites editor: every render device is a **check menu item**
+The “Favorites” submenu is the favourites editor: every render device is a **check menu item**
 (checked = in favourites, the current device is marked ▶) and clicking it adds or removes the device
 without switching. Each entry starts with a device-type symbol derived from
 `PKEY_AudioEndpoint_FormFactor` (speakers, headphones, HDMI/DisplayPort, digital, line level) — `muda`
 cannot render real icons in menu items. Switching happens via the top item, the tray icon or the hotkey.
 
 The hover tooltip is capped at 64 characters (Shell `szTip` limit), so the text is compact:
-`Устройство: N из M` plus the device name, truncated when needed.
+`Device: N of M` plus the device name, truncated when needed.
 
 ### `hotkey` — global shortcut
 

@@ -1,10 +1,10 @@
-//! Версия приложения.
+//! Application version.
 //!
-//! Формат — SemVer плюс номер сборки: `0.1.0+build.42`.
-//! Версия берётся из `Cargo.toml`, номер сборки — из `build.rs`
-//! (переменная окружения `SWITCHER_BUILD_NUMBER`).
+//! Format — SemVer plus a build number: `0.1.0+build.42`.
+//! The version comes from `Cargo.toml`, the build number from `build.rs`
+//! (the `SWITCHER_BUILD_NUMBER` environment variable).
 
-/// Версия с номером сборки: `0.1.0+build.42`.
+/// Version with the build number: `0.1.0+build.42`.
 pub fn full() -> String {
     format!(
         "{}+build.{}",

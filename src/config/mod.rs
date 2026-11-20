@@ -1,6 +1,6 @@
-//! Загрузка и сохранение конфига (избранное).
+//! Loading and saving the config (favorites).
 //!
-//! Расположение: `%APPDATA%\SwitcherProgramm\config.json`.
+//! Location: `%APPDATA%\SwitcherProgramm\config.json`.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -10,18 +10,18 @@ use thiserror::Error;
 
 use crate::hotkey::Hotkey;
 
-/// Структура избранного в конфиге.
+/// Favorites structure in the config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Favorites {
-    /// Список endpoint ID избранных устройств.
+    /// List of endpoint IDs of favorite devices.
     pub devices: Vec<String>,
-    /// Глобальная горячая клавиша переключения (если задана).
-    /// `#[serde(default)]` — старые конфиги без этого поля читаются как `None`.
+    /// Global switching hotkey (if set).
+    /// `#[serde(default)]` — old configs without this field are read as `None`.
     #[serde(default)]
     pub hotkey: Option<Hotkey>,
 }
 
-/// Ошибки работы с конфигом.
+/// Config-related errors.
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("IO error: {0}")]
@@ -30,7 +30,7 @@ pub enum ConfigError {
     Json(#[from] serde_json::Error),
 }
 
-/// Получить путь к файлу конфига.
+/// Get the path to the config file.
 fn config_path() -> PathBuf {
     let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push("SwitcherProgramm");
@@ -39,8 +39,8 @@ fn config_path() -> PathBuf {
     path
 }
 
-/// Загрузить избранное из конфига.
-/// Если файл не существует или пустой — возвращает дефолт (пустое избранное).
+/// Load favorites from the config.
+/// If the file does not exist or is empty — returns the default (empty favorites).
 pub fn load_favorites() -> Favorites {
     let path = config_path();
     if !path.exists() {
@@ -71,7 +71,7 @@ pub fn load_favorites() -> Favorites {
     }
 }
 
-/// Сохранить избранное в конфиг (атомарно: временный файл + rename).
+/// Save favorites to the config (atomically: temporary file + rename).
 pub fn save_favorites(favorites: &Favorites) -> Result<(), ConfigError> {
     let path = config_path();
 

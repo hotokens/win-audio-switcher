@@ -1,19 +1,19 @@
-//! Встраивание иконки приложения.
+//! Embedding the application icon.
 //!
-//! Мастер-файл — `assets/app-icon.png` (512×512 RGBA). Из него собирается:
-//! - `.ico` для ресурса exe (размеры 16…256, PNG-записи);
-//! - RGBA-кадр 32×32 для иконки трея (генерируется в `OUT_DIR` и
-//!   подключается через `include_bytes!`).
+//! The master file is `assets/app-icon.png` (512×512 RGBA). It is used to build:
+//! - the `.ico` for the exe resource (sizes 16…256, PNG entries);
+//! - a 32×32 RGBA frame for the tray icon (generated in `OUT_DIR` and
+//!   included via `include_bytes!`).
 //!
-//! Уменьшение — усреднением по площади (box filter) с предумножением альфы,
-//! чтобы не было тёмной каймы по краям.
+//! Downscaling is area averaging (box filter) with premultiplied alpha,
+//! so there is no dark fringe at the edges.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Размеры, которые попадут в `.ico`.
+/// Sizes that go into the `.ico`.
 const ICON_SIZES: [u32; 9] = [16, 20, 24, 32, 40, 48, 64, 128, 256];
-/// Размер иконки трея (Windows сам уменьшит до 16/20/24 при другом DPI).
+/// Tray icon size (Windows scales it down to 16/20/24 at other DPI).
 const TRAY_SIZE: u32 = 32;
 
 fn main() {
@@ -21,7 +21,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=SWITCHER_BUILD_NUMBER");
 
-    // Номер сборки: env → build-number.txt (инкремент только в release).
+    // Build number: env → build-number.txt (incremented on release only).
     let number = build_number();
     println!("cargo:rustc-env=SWITCHER_BUILD_NUMBER={}", number);
 
@@ -37,7 +37,7 @@ fn main() {
     };
     let (width, height, rgba) = source;
 
-    // Кадр для трея — всегда, независимо от наличия rc.exe.
+    // Tray frame — always, regardless of whether rc.exe is available.
     let tray = resize_rgba(&rgba, width, height, TRAY_SIZE, TRAY_SIZE);
     if let Err(e) = std::fs::write(out_dir.join("tray-32.rgba"), &tray) {
         println!("cargo:warning=cannot write tray icon: {}", e);
@@ -52,7 +52,7 @@ fn main() {
     embed_as_resource(&out_dir, &ico_path);
 }
 
-/// Прочитать PNG и вернуть RGBA-пиксели.
+/// Read the PNG and return RGBA pixels.
 fn load_source() -> Result<(u32, u32, Vec<u8>), Box<dyn std::error::Error>> {
     let bytes = std::fs::read("assets/app-icon.png")?;
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
@@ -80,7 +80,7 @@ fn load_source() -> Result<(u32, u32, Vec<u8>), Box<dyn std::error::Error>> {
     Ok((info.width, info.height, rgba))
 }
 
-/// Уменьшить RGBA-изображение усреднением по площади (premultiplied alpha).
+/// Downscale an RGBA image by area averaging (premultiplied alpha).
 fn resize_rgba(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
     let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
     let mut out = vec![0u8; dw * dh * 4];
@@ -129,12 +129,12 @@ fn resize_rgba(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
     out
 }
 
-/// Длина пересечения отрезков [a0, a1] и [b0, b1].
+/// Length of the overlap of segments [a0, a1] and [b0, b1].
 fn overlap(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
     (a1.min(b1) - a0.max(b0)).max(0.0)
 }
 
-/// Собрать `.ico` из PNG-изображений всех размеров.
+/// Build the `.ico` from PNG images of all sizes.
 fn write_ico(
     path: &Path,
     source_width: u32,
@@ -153,7 +153,7 @@ fn write_ico(
     out.extend_from_slice(&1u16.to_le_bytes()); // type: 1 = icon
     out.extend_from_slice(&(images.len() as u16).to_le_bytes());
 
-    // ICONDIRENTRY для каждого изображения
+    // ICONDIRENTRY for each image
     let mut offset = 6 + 16 * images.len() as u32;
     for (size, data) in &images {
         let dimension = if *size >= 256 { 0 } else { *size as u8 };
@@ -176,7 +176,7 @@ fn write_ico(
     Ok(())
 }
 
-/// Закодировать RGBA-пиксели в PNG (максимальное сжатие).
+/// Encode RGBA pixels as PNG (maximum compression).
 fn encode_png(size: u32, rgba: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut png = Vec::new();
     {
@@ -190,7 +190,7 @@ fn encode_png(size: u32, rgba: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Err
     Ok(png)
 }
 
-/// Скомпилировать `.ico` и манифест в `.res` и передать линкеру.
+/// Compile the `.ico` and the manifest into a `.res` and pass it to the linker.
 fn embed_as_resource(out_dir: &Path, ico_path: &Path) {
     let Some(rc) = find_rc() else {
         println!(
@@ -205,7 +205,7 @@ fn embed_as_resource(out_dir: &Path, ico_path: &Path) {
     }
 
     let rc_file = out_dir.join("app.rc");
-    // В .rc обратные слэши экранируются, пути — в кавычках.
+    // Backslashes are escaped in the .rc, paths are quoted.
     // 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID, 24 = RT_MANIFEST.
     let ico_escaped = ico_path.to_string_lossy().replace('\\', "\\\\");
     let manifest_escaped = manifest_path.to_string_lossy().replace('\\', "\\\\");
@@ -234,8 +234,8 @@ fn embed_as_resource(out_dir: &Path, ico_path: &Path) {
     }
 }
 
-/// Манифест приложения: comctl32 v6 (современные тултипы и меню),
-/// PerMonitorV2 (чёткость на HiDPI) и поддержка Windows 10/11.
+/// Application manifest: comctl32 v6 (modern tooltips and menus),
+/// PerMonitorV2 (sharpness on HiDPI) and Windows 10/11 support.
 const APP_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity type="win32" name="SwitcherProgramm" version="1.0.0.0" processorArchitecture="*"/>
@@ -258,12 +258,12 @@ const APP_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 </assembly>
 "#;
 
-/// Номер сборки.
+/// Build number.
 ///
-/// Приоритет: переменная `SWITCHER_BUILD_NUMBER` (CI/ручной релиз) → счётчик
-/// в `build-number.txt` (коммитится). Счётчик увеличивается только при
-/// release-сборке и пишется атомарно (tmp + rename). Файл намеренно не в
-/// `rerun-if-changed`, иначе сборка зациклится на собственном изменении.
+/// Priority: the `SWITCHER_BUILD_NUMBER` variable (CI/manual release) → the counter
+/// in `build-number.txt` (committed). The counter is incremented only on
+/// release builds and written atomically (tmp + rename). The file is deliberately
+/// not in `rerun-if-changed`, otherwise the build would loop on its own change.
 fn build_number() -> u64 {
     if let Ok(value) = std::env::var("SWITCHER_BUILD_NUMBER") {
         match value.trim().parse::<u64>() {
@@ -300,14 +300,14 @@ fn build_number() -> u64 {
     next
 }
 
-/// Резервный кадр трея (прозрачный), если PNG не прочитался.
+/// Fallback tray frame (transparent) if the PNG could not be read.
 fn write_fallback_tray_icon(out_dir: &Path) {
     let size = TRAY_SIZE as usize;
     let _ = std::fs::write(out_dir.join("tray-32.rgba"), vec![0u8; size * size * 4]);
 }
 
-/// Найти `rc.exe`: переменная `RC`, переменные окружения Visual Studio,
-/// затем стандартные каталоги Windows SDK (берётся самая новая версия).
+/// Find `rc.exe`: the `RC` variable, Visual Studio environment variables,
+/// then the standard Windows SDK directories (the newest version is used).
 fn find_rc() -> Option<PathBuf> {
     if let Ok(value) = std::env::var("RC") {
         let path = PathBuf::from(value);

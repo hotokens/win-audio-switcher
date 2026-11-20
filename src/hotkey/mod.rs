@@ -1,18 +1,18 @@
-//! Глобальная горячая клавиша для переключения устройства вывода.
+//! Global hotkey for switching the output device.
 //!
-//! Регистрация через `RegisterHotKey` с `hwnd = NULL`: Windows доставляет
-//! `WM_HOTKEY` в очередь сообщений нашего потока, поэтому комбинация
-//! срабатывает **из любого приложения**, независимо от того, что активно,
-//! и не требует глобального хука клавиатуры.
+//! Registration via `RegisterHotKey` with `hwnd = NULL`: Windows delivers
+//! `WM_HOTKEY` to our thread's message queue, so the combination
+//! triggers **from any application**, regardless of what is active,
+//! and does not require a global keyboard hook.
 //!
-//! Проверка занятости: перед принятием комбинации мы реально пытаемся её
-//! зарегистрировать. Если она уже занята системой или другим приложением,
-//! `RegisterHotKey` возвращает `ERROR_HOTKEY_ALREADY_REGISTERED` — и
-//! комбинация отклоняется.
+//! Availability check: before accepting a combination we actually try to
+//! register it. If it is already taken by the system or another application,
+//! `RegisterHotKey` returns `ERROR_HOTKEY_ALREADY_REGISTERED` — and
+//! the combination is rejected.
 //!
-//! Захват комбинации при настройке — опрос `GetAsyncKeyState`: он видит
-//! состояние клавиш глобально (даже если фокус в другом окне), а нам
-//! достаточно короткого периода настройки.
+//! Capturing a combination during setup — polling `GetAsyncKeyState`: it sees
+//! the key state globally (even when focus is in another window), and a short
+//! setup period is enough for us.
 
 use std::collections::HashSet;
 
@@ -23,26 +23,26 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 
-/// Идентификатор горячей клавиши в `RegisterHotKey` (у нас она одна).
+/// Hotkey identifier in `RegisterHotKey` (we have only one).
 const HOTKEY_ID: i32 = 1;
 
-/// `ERROR_HOTKEY_ALREADY_REGISTERED` в виде HRESULT (0x8007_0581).
+/// `ERROR_HOTKEY_ALREADY_REGISTERED` as an HRESULT (0x8007_0581).
 const HRESULT_HOTKEY_ALREADY_REGISTERED: u32 = 0x8007_0581;
 
-/// Горячая клавиша: набор модификаторов + виртуальный код клавиши.
+/// Hotkey: a set of modifiers + a virtual key code.
 ///
-/// Модификаторы — битовая маска `MOD_*` из Win32 (`MOD_CONTROL` = 2,
-/// `MOD_SHIFT` = 4, `MOD_ALT` = 1, `MOD_WIN` = 8). Хранится в конфиге
-/// как числа — так сочетание переживает любые изменения в коде.
+/// The modifiers are a bit mask of Win32 `MOD_*` (`MOD_CONTROL` = 2,
+/// `MOD_SHIFT` = 4, `MOD_ALT` = 1, `MOD_WIN` = 8). Stored in the config
+/// as numbers — so the combination survives any code changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hotkey {
-    /// Битовая маска `MOD_CONTROL | MOD_SHIFT | MOD_ALT | MOD_WIN`.
+    /// Bit mask `MOD_CONTROL | MOD_SHIFT | MOD_ALT | MOD_WIN`.
     pub modifiers: u32,
-    /// Виртуальный код клавиши (`VK_*`, например 0x55 — `U`).
+    /// Virtual key code (`VK_*`, for example 0x55 — `U`).
     pub vk: u32,
 }
 
-/// Ошибки регистрации горячей клавиши.
+/// Hotkey registration errors.
 #[derive(Debug, Error)]
 pub enum HotkeyError {
     #[error("combination is taken by Windows or another app")]
@@ -52,11 +52,11 @@ pub enum HotkeyError {
 }
 
 impl Hotkey {
-    /// Зарегистрировать комбинацию глобально.
+    /// Register the combination globally.
     ///
-    /// Старая комбинация с тем же ID сначала снимается (`UnregisterHotKey`).
-    /// `MOD_NOREPEAT` отключает автоповтор при удержании клавиши —
-    /// без него переключение срабатывало бы много раз подряд.
+    /// The old combination with the same ID is first unregistered (`UnregisterHotKey`).
+    /// `MOD_NOREPEAT` disables auto-repeat while a key is held —
+    /// without it switching would fire many times in a row.
     pub fn register(&self) -> Result<(), HotkeyError> {
         unsafe {
             let _ = UnregisterHotKey(None, HOTKEY_ID);
@@ -74,17 +74,17 @@ impl Hotkey {
         }
     }
 
-    /// Снять регистрацию (если она была).
+    /// Unregister (if it was registered).
     pub fn unregister_all() {
         unsafe {
             let _ = UnregisterHotKey(None, HOTKEY_ID);
         }
     }
 
-    /// Человекочитаемый вид: «Ctrl + Shift + U».
+    /// Human-readable form: "Ctrl + Shift + U".
     pub fn display(&self) -> String {
         let mut parts: Vec<&str> = Vec::new();
-        // Порядок как в интерфейсе Windows: Win, Ctrl, Alt, Shift.
+        // Order as in the Windows UI: Win, Ctrl, Alt, Shift.
         if self.modifiers & MOD_WIN.0 != 0 {
             parts.push("Win");
         }
@@ -106,12 +106,12 @@ impl Hotkey {
     }
 }
 
-/// Клавиша нажата прямо сейчас? (старший бит `GetAsyncKeyState`).
+/// Is the key pressed right now? (high bit of `GetAsyncKeyState`).
 fn is_down(vk: u16) -> bool {
     unsafe { (GetAsyncKeyState(vk as i32) as u16) & 0x8000 != 0 }
 }
 
-/// Текущие модификаторы в битовой маске `MOD_*`.
+/// Current modifiers as a `MOD_*` bit mask.
 pub fn modifiers_down() -> u32 {
     let mut modifiers = 0u32;
     if is_down(VK_CONTROL.0) {
@@ -129,12 +129,12 @@ pub fn modifiers_down() -> u32 {
     modifiers
 }
 
-/// Клавиши, которые вообще имеет смысл делать горячими.
+/// Keys that make sense as a hotkey at all.
 ///
-/// Модификаторы (`VK_SHIFT`, `VK_CONTROL`, `VK_MENU`, `VK_LWIN`, `VK_RWIN`)
-/// сюда намеренно не входят: они — часть комбинации, а не её клавиша.
+/// Modifiers (`VK_SHIFT`, `VK_CONTROL`, `VK_MENU`, `VK_LWIN`, `VK_RWIN`)
+/// are deliberately excluded here: they are part of the combination, not its key.
 fn candidate_keys() -> impl Iterator<Item = u32> {
-    // A-Z, 0-9, F1-F24 плюс часто используемые именованные клавиши.
+    // A-Z, 0-9, F1-F24 plus commonly used named keys.
     const EXTRA: &[u32] = &[
         0x08, // Backspace
         0x09, // Tab
@@ -177,17 +177,17 @@ fn candidate_keys() -> impl Iterator<Item = u32> {
         .chain(EXTRA.iter().copied())
 }
 
-/// Все «не модификаторные» клавиши, нажатые прямо сейчас.
+/// All "non-modifier" keys pressed right now.
 pub fn down_keys() -> Vec<u32> {
     candidate_keys().filter(|&vk| is_down(vk as u16)).collect()
 }
 
-/// Разница между двумя опросами: клавиши, нажатые за последний интервал.
+/// Difference between two polls: keys pressed during the latest interval.
 pub fn newly_pressed(down: &[u32], prev: &HashSet<u32>) -> Option<u32> {
     down.iter().copied().find(|vk| !prev.contains(vk))
 }
 
-/// Название клавиши по виртуальному коду для отображения в интерфейсе.
+/// Key name by virtual code, for display in the UI.
 pub fn key_name(vk: u32) -> &'static str {
     match vk {
         0x08 => "Backspace",
